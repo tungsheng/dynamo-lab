@@ -1,0 +1,203 @@
+# kube-prometheus-stack — Helm values for the dynamo-lab observability core.
+# Chart: prometheus-community/kube-prometheus-stack   Namespace: monitoring
+# Release name: kube-prometheus-stack  (so service DNS is
+#   kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+#   kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80 )
+#
+# Goals for this lab:
+#  * Let k6 push results in via Prometheus remote-write.
+#  * Discover ServiceMonitors/PodMonitors in ALL namespaces (Dynamo operator
+#    creates PodMonitors in the `dynamo` namespace; etcd/nats/chaos-mesh export too).
+#  * Provision Grafana with Prometheus (built-in) + Tempo + Loki datasources wired
+#    for traces<->logs<->metrics correlation.
+#  * Modest, lab-sized retention so idle cost stays low.
+#
+# VERIFY: pin chart version at install time, e.g. --version 65.x
+#         (prometheus-community/kube-prometheus-stack). Values keys below are stable
+#         across the 60.x–6x.x line but confirm against the pinned chart.
+
+fullnameOverride: kube-prometheus-stack
+
+# ----------------------------------------------------------------------------
+# Prometheus
+# ----------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    # --- k6 pushes load-test metrics here ---
+    # http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+    enableRemoteWriteReceiver: true
+
+    # Feature flags:
+    #  - exemplar-storage: store exemplars so latency panels can jump to Tempo traces.
+    #  - otlp-write-receiver: accept OTLP metrics at /api/v1/otlp/v1/metrics (optional,
+    #    lets OTLP pipelines land metrics directly). Harmless for the lab.
+    enableFeatures:
+      - exemplar-storage
+      - otlp-write-receiver
+
+    # --- cross-namespace discovery ---
+    # By default the chart selects only monitors carrying its own release label.
+    # Nil-ing these selectors makes Prometheus discover EVERY ServiceMonitor/
+    # PodMonitor/Rule in the cluster (needed for Dynamo's PodMonitors in `dynamo`).
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}   # {} => all namespaces
+    podMonitorNamespaceSelector: {}
+    ruleNamespaceSelector: {}
+
+    # --- lab retention (small; this is not a prod TSDB) ---
+    retention: 7d
+    retentionSize: 8GB
+
+    # Scrape a bit more often than the 60s default so spike/chaos experiments
+    # show fine-grained detail.
+    scrapeInterval: 15s
+    evaluationInterval: 30s
+
+    # Exemplars -> Tempo linkage lives on the Grafana datasource (see below); the
+    # storage flag above is what makes Prometheus keep them.
+
+    # Persistence — one modest volume. Uses the cluster default StorageClass
+    # unless you set storageClassName.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          # storageClassName: gp3   # VERIFY: set if the cluster default isn't gp3.
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        memory: 2Gi
+
+# ----------------------------------------------------------------------------
+# Alertmanager — not needed for a watch-only lab; keep it off to save resources.
+# ----------------------------------------------------------------------------
+alertmanager:
+  enabled: false
+
+# ----------------------------------------------------------------------------
+# Grafana
+# ----------------------------------------------------------------------------
+grafana:
+  enabled: true
+  # Lab-only credentials. VERIFY: rotate / move to a Secret if this cluster is
+  # ever exposed. Access is via `make dashboards` (kubectl port-forward), not a LB.
+  adminUser: admin
+  adminPassword: dynamo-lab
+
+  defaultDashboardsTimezone: browser
+
+  service:
+    type: ClusterIP
+
+  # The sidecar imports any ConfigMap labeled grafana_dashboard: "1" from ANY
+  # namespace — this is how the vendored Dynamo dashboards + lab-overview land.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      label: grafana_datasource
+      labelValue: "1"
+      searchNamespace: ALL
+
+  # The chart auto-provisions the Prometheus datasource (uid: prometheus) and,
+  # because we don't disable it, keeps it as default. We add Tempo + Loki and
+  # wire the correlation links between all three.
+  # VERIFY: the built-in Prometheus datasource uid is "prometheus" in current
+  #         kube-prometheus-stack; the trace/log links below depend on that uid.
+  additionalDataSources:
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      # Release name `tempo`, single-binary -> service `tempo`.
+      url: http://tempo.monitoring.svc.cluster.local:3200
+      jsonData:
+        # Node graph from the service-graph metrics Tempo generates.
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+        # Trace -> Logs: pivot from a span to its Loki logs by trace_id.
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          filterByTraceID: true
+          filterBySpanID: false
+          tags:
+            - key: service.name
+              value: service_name
+        # Trace -> Metrics: jump from a span to RED metrics in Prometheus.
+        tracesToMetrics:
+          datasourceUid: prometheus
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      # Release name `loki`, single-binary -> gateway/service `loki`.
+      url: http://loki.monitoring.svc.cluster.local:3100
+      jsonData:
+        # Logs -> Traces: detect a trace_id in log lines and link to Tempo.
+        derivedFields:
+          - name: TraceID
+            # matches trace_id=<hex> or "trace_id":"<hex>" in JSON/logfmt lines
+            matcherRegex: '(?:trace_id|traceID|trace-id)"?[:=]"?([a-f0-9]+)'
+            url: '$${__value.raw}'
+            datasourceUid: tempo
+
+  grafana.ini:
+    # Exemplars in Prometheus panels become clickable links into Tempo.
+    # (Also enabled per-datasource, but this keeps the toggle on globally.)
+    feature_toggles:
+      enable: traceqlEditor traceToMetrics
+    # Allow the chaos-annotation bridge (in-cluster) to POST Grafana annotations.
+    # It authenticates with the admin creds above against the Grafana HTTP API.
+    log:
+      level: info
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# ----------------------------------------------------------------------------
+# Trim node/cluster exporters we don't need for a small lab (keep node metrics
+# and kube-state — Karpenter + fleet dashboards use them).
+# ----------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+kube-state-metrics:
+  enabled: true
+kubeStateMetrics:
+  enabled: true
+
+# Control-plane scrape targets that are unreachable on EKS (managed control plane).
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false     # this is the k8s control-plane etcd, NOT the fleet's etcd.
+kubeProxy:
+  enabled: false     # VERIFY: enable if you run kube-proxy (not needed on some EKS setups).

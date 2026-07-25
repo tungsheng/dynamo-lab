@@ -1,0 +1,41 @@
+# values-chaos-mesh.yaml
+# Chaos Mesh — the fault-injection engine for the lab (pod kill, network partition, latency).
+# Driven by its Schedule CRD for the recurring "monkey". See ADR
+# docs/adr/0004-chaos-mesh-over-custom-monkey.md.
+#
+# Chart: chaos-mesh/chaos-mesh  (helm repo add chaos-mesh https://charts.chaos-mesh.org)
+# Namespace: chaos-mesh
+#
+# VERIFY: value keys below against the pinned chart version (chaos-mesh values have been
+#         stable but `dashboard.securityMode` / metrics keys occasionally shift).
+
+# Container runtime socket for pod-kill/host faults. EKS on AL2023 uses containerd.
+chaosDaemon:
+  runtime: containerd
+  socketPath: /run/containerd/containerd.sock   # VERIFY: correct on the pinned EKS AMI
+
+# Web dashboard so we can watch/apply experiments by hand.
+dashboard:
+  create: true
+  # Lab convenience: disable token auth on the dashboard. Do NOT do this outside a throwaway lab.
+  securityMode: false
+  service:
+    type: ClusterIP   # reach it via `kubectl port-forward` / `make dashboards`
+
+# Prometheus metrics from the controller/daemon. kube-prometheus-stack discovers
+# ServiceMonitors/PodMonitors cluster-wide (serviceMonitorSelectorNilUsesHelmValues=false).
+controllerManager:
+  # VERIFY: `serviceMonitor` block is supported on the pinned chart; some versions only expose
+  #         metrics via annotated Services and need a hand-written ServiceMonitor instead.
+  serviceMonitor:
+    enabled: true
+  replicaCount: 1
+
+prometheus:
+  # Chaos Mesh's own bundled prometheus is NOT wanted — we scrape into kube-prometheus-stack.
+  create: false
+
+# Label first-party resources for lab-wide selection/annotation.
+# VERIFY: chaos-mesh chart honors a global label map here; if not, labels can be added post-hoc.
+commonLabels:
+  app.kubernetes.io/part-of: dynamo-lab

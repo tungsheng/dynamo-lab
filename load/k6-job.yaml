@@ -1,0 +1,296 @@
+# load/k6-job.yaml
+#
+# In-cluster k6 load run against the Dynamo frontend, results pushed to
+# Prometheus via remote-write so they land on the same Grafana stack as the
+# fleet metrics.
+#
+# This file is self-contained (Job + ConfigMap) so `kubectl apply -f` just
+# works. The ConfigMap embeds load/k6/script.js and load/profiles/profiles.js
+# under a directory layout that preserves the relative import
+# (`../profiles/profiles.js`) the script uses.
+#
+# scripts/load.sh applies this self-contained Job directly. If you edit the .js
+# files by hand, keep the embedded copies below in sync.
+#
+# Override the traffic shape with PROFILE (baseline|ramp|spike|sustained|soak).
+# The Makefile default is spike (see the make contract). scripts patch the
+# PROFILE / FRONTEND_URL env before applying.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-script
+  namespace: load
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/component: load
+data:
+  # --- keys are mounted into a nested layout via the volume `items` below ---
+  script.js: |
+    // load/k6/script.js  (embedded copy — keep in sync with source)
+    import http from 'k6/http';
+    import { check } from 'k6';
+    import { Counter, Trend } from 'k6/metrics';
+    import { profiles, thresholds, profileNames } from '../profiles/profiles.js';
+
+    const FRONTEND_URL = (__ENV.FRONTEND_URL || 'http://localhost:8000').replace(/\/+$/, '');
+    const PROFILE = __ENV.PROFILE || 'spike';
+    const MODEL = __ENV.MODEL || 'Qwen/Qwen3-0.6B';
+    const MAX_TOKENS = Number(__ENV.MAX_TOKENS || 64);
+    const REQUEST_TIMEOUT = __ENV.REQUEST_TIMEOUT || '60s';
+    const STREAM = (__ENV.STREAM || 'false').toLowerCase() === 'true';
+
+    if (!profiles[PROFILE]) {
+      throw new Error(
+        `Unknown PROFILE="${PROFILE}". Valid profiles: ${profileNames().join(', ')}`
+      );
+    }
+
+    const chatErrors = new Counter('dynamo_chat_errors');
+    const promptTokens = new Trend('dynamo_prompt_tokens');
+    const completionTokens = new Trend('dynamo_completion_tokens');
+
+    export const options = {
+      tags: { profile: PROFILE },
+      scenarios: { [PROFILE]: profiles[PROFILE] },
+      thresholds: thresholds[PROFILE] || {},
+      noConnectionReuse: false,
+      discardResponseBodies: false,
+    };
+
+    const PROMPTS = [
+      'In one sentence, what is a large language model?',
+      'Give me three uses for a paperclip.',
+      'Summarize the plot of Hamlet in two sentences.',
+      'What is the capital of Australia?',
+      'Write a haiku about distributed systems.',
+      'Explain KV cache to a five year old.',
+      'List two benefits of disaggregated inference.',
+      'Translate "good morning" into French and Japanese.',
+    ];
+
+    function buildBody() {
+      const prompt = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+      return JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'system', content: 'You are a concise assistant.' },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: MAX_TOKENS,
+        temperature: 0.7,
+        stream: STREAM,
+      });
+    }
+
+    const params = {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+      tags: { endpoint: 'chat_completions' },
+    };
+
+    export default function () {
+      const res = http.post(`${FRONTEND_URL}/v1/chat/completions`, buildBody(), params);
+      const ok = check(res, {
+        'status is 2xx': (r) => r.status >= 200 && r.status < 300,
+        'has choices': (r) => {
+          if (STREAM) return true;
+          try {
+            const j = r.json();
+            return j && Array.isArray(j.choices) && j.choices.length > 0;
+          } catch (_e) {
+            return false;
+          }
+        },
+      });
+      if (!ok) {
+        chatErrors.add(1);
+        return;
+      }
+      if (!STREAM) {
+        try {
+          const usage = res.json('usage');
+          if (usage) {
+            if (typeof usage.prompt_tokens === 'number') promptTokens.add(usage.prompt_tokens);
+            if (typeof usage.completion_tokens === 'number') {
+              completionTokens.add(usage.completion_tokens);
+            }
+          }
+        } catch (_e) {}
+      }
+    }
+
+    export function handleSummary(data) {
+      const line = (k) => {
+        const m = data.metrics[k];
+        return m ? JSON.stringify(m.values) : '(n/a)';
+      };
+      const banner =
+        `\n=== dynamo-lab load: profile="${PROFILE}" target=${FRONTEND_URL} model=${MODEL} ===\n` +
+        `http_reqs:          ${line('http_reqs')}\n` +
+        `http_req_failed:    ${line('http_req_failed')}\n` +
+        `http_req_duration:  ${line('http_req_duration')}\n` +
+        `dynamo_chat_errors: ${line('dynamo_chat_errors')}\n`;
+      return { stdout: banner };
+    }
+  profiles.js: |
+    // load/profiles/profiles.js  (embedded copy — keep in sync with source)
+    const num = (name, dflt) => {
+      const v = __ENV[name];
+      const n = v === undefined || v === '' ? NaN : Number(v);
+      return Number.isFinite(n) ? n : dflt;
+    };
+    const str = (name, dflt) => {
+      const v = __ENV[name];
+      return v === undefined || v === '' ? dflt : v;
+    };
+
+    const BASE_RPS = num('BASE_RPS', 5);
+    const PEAK_RPS = num('PEAK_RPS', 250);
+    const SOAK_RPS = num('SOAK_RPS', 20);
+    const VUS_MAX = num('VUS_MAX', 300);
+
+    const preVUs = Math.max(20, Math.min(VUS_MAX, Math.ceil(PEAK_RPS * 0.5)));
+
+    const common = {
+      timeUnit: '1s',
+      preAllocatedVUs: preVUs,
+      maxVUs: VUS_MAX,
+    };
+
+    export const profiles = {
+      baseline: {
+        executor: 'constant-arrival-rate',
+        rate: BASE_RPS,
+        duration: str('BASELINE_DURATION', '10m'),
+        ...common,
+      },
+      ramp: {
+        executor: 'ramping-arrival-rate',
+        startRate: BASE_RPS,
+        stages: [
+          { target: BASE_RPS, duration: str('RAMP_WARMUP', '1m') },
+          { target: PEAK_RPS, duration: str('RAMP_UP', '5m') },
+          { target: PEAK_RPS, duration: str('RAMP_HOLD', '3m') },
+          { target: BASE_RPS, duration: str('RAMP_DOWN', '3m') },
+        ],
+        ...common,
+      },
+      spike: {
+        executor: 'ramping-arrival-rate',
+        startRate: BASE_RPS,
+        stages: [
+          { target: BASE_RPS, duration: str('SPIKE_PRE', '2m') },
+          { target: PEAK_RPS, duration: '5s' },
+          { target: PEAK_RPS, duration: str('SPIKE_HOLD', '2m') },
+          { target: BASE_RPS, duration: '5s' },
+          { target: BASE_RPS, duration: str('SPIKE_POST', '3m') },
+        ],
+        ...common,
+      },
+      sustained: {
+        executor: 'constant-arrival-rate',
+        rate: PEAK_RPS,
+        duration: str('SUSTAINED_DURATION', '15m'),
+        ...common,
+      },
+      soak: {
+        executor: 'constant-arrival-rate',
+        rate: SOAK_RPS,
+        duration: str('SOAK_DURATION', '2h'),
+        ...common,
+      },
+    };
+
+    export const thresholds = {
+      baseline: { http_req_failed: ['rate<0.02'], http_req_duration: ['p(95)<2000'] },
+      ramp: { http_req_failed: ['rate<0.10'], http_req_duration: ['p(95)<5000'] },
+      spike: { http_req_failed: ['rate<0.50'] },
+      sustained: { http_req_failed: ['rate<0.20'], http_req_duration: ['p(95)<8000'] },
+      soak: { http_req_failed: ['rate<0.05'], http_req_duration: ['p(95)<3000'] },
+    };
+
+    export function profileNames() {
+      return Object.keys(profiles);
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-load
+  namespace: load
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/component: load
+spec:
+  backoffLimit: 0            # a load run is not "retryable"; rerun via make load-start
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: dynamo-lab
+        app.kubernetes.io/component: load
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          # VERIFY: grafana/k6 image tag — pin to a release you trust. The
+          # `experimental-prometheus-rw` output name is valid across k6
+          # 0.47.x–1.x; confirm it hasn't been promoted/renamed in your tag.
+          image: grafana/k6:0.55.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - --out
+            - experimental-prometheus-rw
+            - /work/k6/script.js
+          env:
+            # ---- what to run (scripts' render injects ${PROFILE} via envsubst) ----
+            - name: PROFILE
+              value: "${PROFILE}"      # baseline | ramp | spike | sustained | soak
+            # ---- where to send traffic ----
+            # scripts' render injects ${FRONTEND_URL}, computed from the TOPOLOGY
+            # selector as http://mocker-<topology>-frontend.dynamo.svc.cluster.local:8000.
+            # PROFILE (traffic shape) is INDEPENDENT of TOPOLOGY (fleet shape).
+            # VERIFY: operator names the frontend Service <dgd-name>-frontend
+            #   (our DGDs mocker-agg / mocker-disagg -> mocker-agg-frontend /
+            #    mocker-disagg-frontend in ns dynamo on :8000).
+            - name: FRONTEND_URL
+              value: "${FRONTEND_URL}"
+            - name: MODEL
+              value: "Qwen/Qwen3-0.6B"
+            # ---- where results go (Prometheus remote-write receiver) ----
+            - name: K6_PROMETHEUS_RW_SERVER_URL
+              value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+            # Push trend percentiles so Grafana gets p50/p90/p95/p99, not just avg.
+            - name: K6_PROMETHEUS_RW_TREND_STATS
+              value: "p(50),p(90),p(95),p(99),min,max,avg"
+            # Classic per-stat trend series only (K6_PROMETHEUS_RW_TREND_STATS above):
+            # Prometheus is NOT started with native histograms and the lab-overview
+            # dashboard reads classic series (k6_http_req_duration_p95, etc.).
+            - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
+              value: "false"
+            # Tag every k6 series so multiple runs are distinguishable in Prom.
+            - name: K6_PROMETHEUS_RW_STALE_MARKERS
+              value: "true"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          volumeMounts:
+            - name: k6-script
+              mountPath: /work
+      volumes:
+        - name: k6-script
+          configMap:
+            name: k6-script
+            # Reproduce the source tree so `../profiles/profiles.js` resolves
+            # from /work/k6/script.js.
+            items:
+              - key: script.js
+                path: k6/script.js
+              - key: profiles.js
+                path: profiles/profiles.js

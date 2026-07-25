@@ -1,0 +1,58 @@
+# nodepool.yaml
+# Karpenter NodePool — the elastic WORKER capacity for the fleet. The 2x m7i.large system
+# managed node group (terraform) hosts controllers + observability; Karpenter provisions
+# everything else, so a big traffic spike scales pods and then NODES. See ADR
+# docs/adr/0008-karpenter-node-autoscaling.md.
+#
+# Applied by scripts (NOT terraform). apiVersion VERIFY: karpenter.sh/v1 is current for
+# Karpenter >= 1.0; older clusters used karpenter.sh/v1beta1 (field names differ).
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: workers
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: dynamo-lab
+        dynamo-lab/pool: workers
+    spec:
+      # CPU-only lab: no GPUs. Restrict to c7i (compute) + m7i (general) families, amd64/linux.
+      requirements:
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: ["c7i", "m7i"]
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: ["large", "xlarge", "2xlarge"]   # keep node granularity modest for the lab
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        # Spot first (cheap), on-demand as fallback — both allowed.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default          # matches metadata.name in ec2nodeclass.yaml
+      # Give Karpenter room to reclaim empty/underused nodes quickly in a lab.
+      expireAfter: 168h        # recycle nodes weekly
+
+  # Cap total elastic capacity so a runaway spike experiment can't run up a huge bill.
+  limits:
+    cpu: "100"                 # ~ up to 100 vCPU of Karpenter workers
+    memory: 200Gi
+
+  # Aggressive consolidation so the fleet scales back down cheaply after a spike subsides —
+  # this is exactly the second scaling loop the lab wants to observe.
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
+    budgets:
+      - nodes: "10%"           # cap simultaneous voluntary disruptions

@@ -1,0 +1,59 @@
+# values-nats.yaml
+# nats/nats — the fleet's KV event plane (KV-aware routing publishes/consumes here).
+# Run HA: 3-node cluster with JetStream. See ADR docs/adr/0003-ha-coordination-plane.md.
+#
+# Chart: nats/nats  (helm repo add nats https://nats-io.github.io/k8s/helm/charts/)
+# Namespace: dynamo
+# In-cluster DNS the fleet uses: nats://nats.dynamo.svc.cluster.local:4222
+#
+# VERIFY: value key layout below matches the pinned nats chart. The modern nats chart (>=1.x)
+#         uses `config.{jetstream,cluster}` and `promExporter`; older 0.x charts used
+#         `nats.jetstream`, `cluster.enabled`, and `exporter`. Confirm before applying.
+
+config:
+  # 3-node clustered NATS so chaos can partition/degrade the event plane gradually.
+  cluster:
+    enabled: true
+    replicas: 3
+  # JetStream on — required for the KV/event plane the router depends on.
+  jetstream:
+    enabled: true
+    fileStore:
+      enabled: true
+      pvc:
+        enabled: true
+        size: 2Gi
+    memoryStore:
+      enabled: true
+      maxSize: 256Mi
+
+# Prometheus NATS exporter as a sidecar, scraped via PodMonitor.
+promExporter:
+  enabled: true
+  podMonitor:
+    enabled: true
+    # VERIFY: promExporter.podMonitor is the correct path on the pinned chart (vs. a top-level
+    #         `exporter.serviceMonitor` on older charts).
+
+# Spread the 3 servers across nodes so one node loss cannot take the cluster.
+podTemplate:
+  topologySpreadConstraints:
+    kubernetes.io/hostname:
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule
+
+container:
+  merge:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# Label first-party resources for lab-wide selection/annotation.
+# VERIFY: `commonLabels` supported by the pinned nats chart; if not, labels can be applied via
+#         podTemplate.merge.metadata.labels instead.
+commonLabels:
+  app.kubernetes.io/part-of: dynamo-lab

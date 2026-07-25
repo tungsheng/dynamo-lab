@@ -1,0 +1,57 @@
+# values-dynamo-platform.yaml
+# Helm values for the NVIDIA Dynamo Kubernetes Platform chart (dynamo-platform),
+# which deploys the Dynamo operator + supporting RBAC into namespace `dynamo-system`.
+#
+# In this lab we run our OWN highly-available coordination plane (etcd + NATS) in the
+# `dynamo` namespace (see platform/coordination/), so we DISABLE the etcd/NATS
+# subcharts that dynamo-platform would otherwise install. The fleet's DynamoGraphDeployment
+# points at etcd.dynamo / nats.dynamo directly (see fleet/).
+#
+# Chart: dynamo-platform   Repo: https://helm.ngc.nvidia.com/nvidia/ai-dynamo
+# Namespace: dynamo-system
+#
+# VERIFY: pinned chart version — NGC "latest" for dynamo-platform was 1.3.0 at build time
+#         (main-branch Chart.yaml already reads 1.4.0 as an unreleased dev bump). Run
+#         `helm search repo nvidia-ai-dynamo/dynamo-platform --versions` and pin the release
+#         that matches DYNAMO_VERSION used for the mocker image (see fleet/).
+# VERIFY: the exact global toggle keys below (global.etcd.install / global.nats.install /
+#         global.grove.install / global.kai-scheduler.install) against the pinned chart's
+#         values.yaml — key names have shifted across Dynamo releases.
+
+global:
+  # We manage etcd + NATS ourselves (HA, ns `dynamo`). Do NOT let the platform chart install them.
+  etcd:
+    install: false          # VERIFY: key path for disabling the bundled bitnami/etcd subchart
+  nats:
+    install: false          # VERIFY: key path for disabling the bundled nats subchart
+  # Optional schedulers/orchestrators shipped with the platform chart — not needed for a
+  # CPU-only mocker lab. Keep them off to minimize moving parts.
+  grove:
+    install: false          # VERIFY: grove subchart toggle key
+  kai-scheduler:
+    install: false          # VERIFY: kai-scheduler subchart toggle key
+
+dynamo-operator:
+  enabled: true
+
+  # The operator must reconcile DynamoGraphDeployments that live in the `dynamo` namespace
+  # while the operator itself runs in `dynamo-system`. By default the operator is restricted
+  # to its own release namespace, which would leave our fleet unmanaged. Disable the
+  # restriction so it watches all namespaces (fine for a single-tenant lab).
+  # VERIFY: namespaceRestriction.enabled is the correct key on the pinned chart; some releases
+  #         instead expose `namespaceRestriction.targetNamespace: dynamo` or a
+  #         `controllerManager.watchNamespaces` list. Confirm against the operator subchart values.
+  namespaceRestriction:
+    enabled: false
+
+  # Expose operator metrics to Prometheus. kube-prometheus-stack is configured with
+  # serviceMonitorSelectorNilUsesHelmValues=false so it will pick this ServiceMonitor up.
+  # VERIFY: metrics/serviceMonitor value keys on the pinned chart.
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+  # Label first-party resources for lab-wide selection/annotation.
+  commonLabels:
+    app.kubernetes.io/part-of: dynamo-lab

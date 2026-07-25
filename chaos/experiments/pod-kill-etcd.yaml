@@ -1,0 +1,25 @@
+# Chaos experiment: kill one etcd member.
+#
+# Coordination-plane experiment. etcd backs Dynamo service discovery (leases). With a
+# 3-node quorum (see ADR-0003) killing ONE member is a graceful-degradation case: the
+# quorum survives, the member restarts (StatefulSet), and re-joins. Dial etcd to a
+# single replica to turn this into the loss-of-quorum / total-outage story instead.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-etcd
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-target: etcd-member
+spec:
+  action: pod-kill
+  mode: one            # a single random etcd member; quorum should hold
+  gracePeriod: 0
+  selector:
+    namespaces:
+      - dynamo
+    labelSelectors:
+      # bitnami/etcd chart, release name "etcd" (see platform spec).
+      # VERIFY: chart pod labels — app.kubernetes.io/name=etcd, app.kubernetes.io/instance=etcd.
+      app.kubernetes.io/name: etcd

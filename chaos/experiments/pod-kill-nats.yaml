@@ -1,0 +1,25 @@
+# Chaos experiment: kill one NATS node.
+#
+# Coordination-plane experiment. NATS is the KV event plane that KV-aware routing rides
+# on. With a 3-node JetStream cluster (see ADR-0003), killing ONE node is graceful
+# degradation: the cluster keeps a quorum for the JetStream meta-group, the node restarts
+# and re-syncs streams. Watch router routing quality (cache-hit rate) during the gap.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-nats
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-target: nats-node
+spec:
+  action: pod-kill
+  mode: one            # a single random NATS node; cluster quorum should hold
+  gracePeriod: 0
+  selector:
+    namespaces:
+      - dynamo
+    labelSelectors:
+      # nats/nats chart, release name "nats" (see platform spec).
+      # VERIFY: chart pod labels — app.kubernetes.io/name=nats, app.kubernetes.io/instance=nats.
+      app.kubernetes.io/name: nats

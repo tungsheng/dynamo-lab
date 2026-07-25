@@ -1,0 +1,35 @@
+# Chaos experiment: network partition between the workers and NATS.
+#
+# The most instructive coordination-plane fault (see ADR-0004): the workers stay alive
+# and Ready, but they can no longer publish/subscribe KV events on NATS. KV-aware
+# routing goes blind (the router's view of each worker's cache goes stale) even though
+# no pod died — a truer failure than a clean process kill.
+#
+# `direction: both` fully isolates worker<->NATS traffic in both directions; `duration`
+# makes the partition self-heal so a Schedule run leaves the fleet recovered.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: netpart-workers-nats
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-target: workers-to-nats
+spec:
+  action: partition
+  direction: both
+  duration: "2m"
+  mode: all            # partition every worker from NATS
+  selector:
+    namespaces:
+      - dynamo
+    labelSelectors:
+      nvidia.com/dynamo-component-type: worker
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - dynamo
+      labelSelectors:
+        # VERIFY: nats/nats chart pod labels.
+        app.kubernetes.io/name: nats

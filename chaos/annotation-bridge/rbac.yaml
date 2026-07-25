@@ -1,0 +1,61 @@
+# RBAC for the chaos annotation bridge.
+#
+# The bridge runs in the `chaos-mesh` namespace but reads Events and chaos-mesh.org
+# objects in the `dynamo` namespace (where the experiments and the monkey's Schedules
+# live and where their child chaos objects are created). So: a ServiceAccount in
+# chaos-mesh, a Role in dynamo granting read on events + chaos resources, and a
+# RoleBinding in dynamo that binds the cross-namespace ServiceAccount.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaos-annotation-bridge
+  namespace: chaos-mesh
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/name: chaos-annotation-bridge
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaos-annotation-bridge
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/name: chaos-annotation-bridge
+rules:
+  # Core Events are what the bridge streams. Both API groups are listed because event
+  # objects live under "" (v1) and events.k8s.io depending on emitter/version.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Read access to the chaos objects themselves (for enrichment / future use).
+  - apiGroups: ["chaos-mesh.org"]
+    resources:
+      - podchaos
+      - networkchaos
+      - schedules
+      - stresschaos
+      - iochaos
+      - timechaos
+      - dnschaos
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos-annotation-bridge
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/name: chaos-annotation-bridge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: chaos-annotation-bridge
+subjects:
+  - kind: ServiceAccount
+    name: chaos-annotation-bridge
+    namespace: chaos-mesh

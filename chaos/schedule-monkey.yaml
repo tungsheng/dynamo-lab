@@ -1,0 +1,146 @@
+# The chaos monkey.
+#
+# A set of Chaos Mesh `Schedule` resources that randomly and recurrently inject the
+# experiments defined in ./experiments against the fleet and coordination plane. This is
+# the "monkey": `chaos-start` = `kubectl apply -f chaos/schedule-monkey.yaml`,
+# `chaos-stop` = `kubectl delete -f chaos/schedule-monkey.yaml`.
+#
+# Randomness comes from `mode: one` (Chaos Mesh picks a random matching pod each run) and
+# from staggered cron intervals across several fault types, so over time the monkey mixes
+# pod kills with network partitions and latency rather than repeating one fault. Each
+# Schedule embeds the experiment inline (a Schedule wraps exactly one chaos type), so
+# these mirror the standalone files in ./experiments.
+#
+# Safety knobs on every Schedule:
+#   concurrencyPolicy: Forbid   -> never overlap runs of the same Schedule
+#   historyLimit: 5             -> keep the last 5 generated chaos objects for inspection
+#   startingDeadlineSeconds     -> skip a run rather than pile up if the controller was busy
+#
+# VERIFY: chaos-mesh.org/v1alpha1 Schedule field names (schedule/type/<lowerCamelType>).
+---
+# Every 10 min: kill a random worker (decode in agg; decode or prefill in disagg).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Schedule
+metadata:
+  name: monkey-pod-kill-worker
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-monkey: "true"
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  historyLimit: 5
+  startingDeadlineSeconds: 60
+  type: PodChaos
+  podChaos:
+    action: pod-kill
+    mode: one
+    gracePeriod: 0
+    selector:
+      namespaces:
+        - dynamo
+      labelSelectors:
+        nvidia.com/dynamo-component-type: worker
+---
+# Every 30 min: kill a random coordination-plane pod (etcd OR nats — expression selector
+# matches both app names; mode:one picks one victim across the combined set).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Schedule
+metadata:
+  name: monkey-pod-kill-coordination
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-monkey: "true"
+spec:
+  schedule: "3,33 * * * *"      # offset from the worker schedule so faults rarely coincide
+  concurrencyPolicy: Forbid
+  historyLimit: 5
+  startingDeadlineSeconds: 60
+  type: PodChaos
+  podChaos:
+    action: pod-kill
+    mode: one
+    gracePeriod: 0
+    selector:
+      namespaces:
+        - dynamo
+      # VERIFY: bitnami/etcd and nats/nats both stamp app.kubernetes.io/name; the
+      # expression matches either so the monkey randomly hits etcd or NATS.
+      expressionSelectors:
+        - key: app.kubernetes.io/name
+          operator: In
+          values:
+            - etcd
+            - nats
+---
+# Every 20 min: 2-minute latency storm on the router -> worker path (self-heals).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Schedule
+metadata:
+  name: monkey-latency-router-worker
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-monkey: "true"
+spec:
+  schedule: "7,27,47 * * * *"
+  concurrencyPolicy: Forbid
+  historyLimit: 5
+  startingDeadlineSeconds: 60
+  type: NetworkChaos
+  networkChaos:
+    action: delay
+    direction: to
+    duration: "2m"
+    mode: all
+    selector:
+      namespaces:
+        - dynamo
+      labelSelectors:
+        nvidia.com/dynamo-component-type: frontend
+    target:
+      mode: all
+      selector:
+        namespaces:
+          - dynamo
+        labelSelectors:
+          nvidia.com/dynamo-component-type: worker
+    delay:
+      latency: "150ms"
+      correlation: "50"
+      jitter: "50ms"
+---
+# Every 45 min: 1-minute partition between the workers and NATS (self-heals).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Schedule
+metadata:
+  name: monkey-netpart-workers-nats
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-monkey: "true"
+spec:
+  schedule: "15 * * * *"        # once an hour; the harshest fault, kept infrequent
+  concurrencyPolicy: Forbid
+  historyLimit: 5
+  startingDeadlineSeconds: 60
+  type: NetworkChaos
+  networkChaos:
+    action: partition
+    direction: both
+    duration: "1m"
+    mode: all
+    selector:
+      namespaces:
+        - dynamo
+      labelSelectors:
+        nvidia.com/dynamo-component-type: worker
+    target:
+      mode: all
+      selector:
+        namespaces:
+          - dynamo
+        labelSelectors:
+          app.kubernetes.io/name: nats

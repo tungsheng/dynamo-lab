@@ -1,0 +1,74 @@
+# Tempo — Helm values for dynamo-lab distributed tracing.
+# Chart: grafana/tempo   Namespace: monitoring   Release name: tempo
+# Single-binary chart (grafana/tempo, NOT tempo-distributed). Filesystem storage.
+#
+# The Dynamo fleet exports OTLP traces here (see fleet OTLP config):
+#   grpc: tempo.monitoring.svc.cluster.local:4317
+#   http: tempo.monitoring.svc.cluster.local:4318
+# Grafana queries it over the Tempo API on :3200.
+#
+# VERIFY: pin chart version at install (grafana/tempo 1.x). Keys `tempo.receivers`
+#         and `tempo.metricsGenerator` are the single-binary chart contract.
+
+# Point-of-note: this is the single-binary `grafana/tempo` chart. The service is
+# named `tempo`, exposing 3200 (API/query), 4317 (OTLP gRPC), 4318 (OTLP HTTP).
+
+tempo:
+  # Enable OTLP receivers on the standard ports.
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+    # jaeger/zipkin receivers intentionally omitted — the fleet speaks OTLP.
+
+  # Storage: local filesystem (lab). No S3/GCS.
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  # Retention — small for a lab.
+  retention: 48h
+
+  # Metrics generator: emit span metrics + service-graph metrics and remote-write
+  # them to Prometheus so Grafana's service map + RED-from-traces work, and so
+  # exemplars can link metrics -> traces.
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+    # VERIFY: some chart versions nest this under `tempo.metricsGenerator.remoteWrite`
+    #         (a list). If Helm rejects `remoteWriteUrl`, switch to:
+    #   remoteWrite:
+    #     - url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+
+  # Turn on the processors the generator needs.
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - service-graphs
+          - span-metrics
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+persistence:
+  enabled: true
+  size: 10Gi
+  # storageClassName: gp3   # VERIFY: set if the cluster default isn't gp3.
+
+# Expose a ServiceMonitor for Tempo's own metrics (discovered cluster-wide).
+serviceMonitor:
+  enabled: true
+
+# The single-binary chart exposes the Tempo service; no gateway needed.

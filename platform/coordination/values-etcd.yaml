@@ -1,0 +1,65 @@
+# values-etcd.yaml
+# bitnami/etcd — the fleet's service-discovery store (leases). Run HA: 3-node quorum.
+# See ADR docs/adr/0003-ha-coordination-plane.md.
+#
+# Chart: oci://registry-1.docker.io/bitnamicharts/etcd
+# Namespace: dynamo
+# In-cluster DNS the fleet uses: http://etcd.dynamo.svc.cluster.local:2379
+#
+# NOTE ON IMAGES (VERIFY): as of 2025-08-28 Bitnami moved un-hardened/older image tags out of
+# docker.io/bitnami into docker.io/bitnamilegacy (the "Bitnami Secure Images" transition).
+# Recent chart versions default to an image tag that may no longer be pullable anonymously
+# from docker.io/bitnami. We therefore pin the legacy image explicitly and allow it. If you
+# pin a newer chart, re-check that this repository/tag exists and is anonymously pullable.
+image:
+  registry: docker.io
+  repository: bitnamilegacy/etcd   # VERIFY: legacy repo path + that the tag below is present
+  tag: 3.5.21-debian-12-r5         # VERIFY: pin a tag that actually exists in bitnamilegacy/etcd
+global:
+  security:
+    # Required when using bitnamilegacy/ images with a recent chart, which otherwise refuses
+    # "non-standard" images. Safe for a throwaway lab.
+    allowInsecureImages: true      # VERIFY: key still exists on the pinned chart
+
+# 3-node quorum -> lets chaos show graded degradation (lose 1 = survive, lose 2 = lose quorum).
+replicaCount: 3
+
+# Auth fully disabled: the mocker fleet connects to etcd with no credentials.
+auth:
+  rbac:
+    create: false
+    allowNoneAuthentication: true  # -> ALLOW_NONE_AUTHENTICATION=yes in the container
+  token:
+    enabled: false
+  client:
+    secureTransport: false
+  peer:
+    secureTransport: false
+
+# Prometheus metrics. kube-prometheus-stack discovers PodMonitors cluster-wide
+# (serviceMonitorSelectorNilUsesHelmValues=false covers PodMonitors too on that chart).
+metrics:
+  enabled: true
+  podMonitor:
+    enabled: true
+    namespace: dynamo
+    # VERIFY: bitnami/etcd exposes metrics via PodMonitor (not ServiceMonitor) on recent charts.
+
+# Small persistent volumes — this is discovery state, not bulk data.
+persistence:
+  enabled: true
+  size: 2Gi
+
+# Spread the 3 members across nodes so a single node loss can't take quorum.
+podAntiAffinityPreset: hard
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+commonLabels:
+  app.kubernetes.io/part-of: dynamo-lab

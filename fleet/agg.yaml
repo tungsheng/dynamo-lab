@@ -1,0 +1,190 @@
+# dynamo-lab :: fleet :: AGGREGATED profile
+#
+# One DynamoGraphDeployment (DGD), reconciled by the Dynamo operator (ns dynamo-system),
+# that declares the whole fleet as a single unit: Frontend (OpenAI API + KV router),
+# Planner (autoscaler), and a single aggregated Mocker worker pool (each worker does BOTH
+# prefill and decode). This is the bring-up / scaffolding topology (see docs/adr/0007).
+#
+# Workers are Dynamo's GPU-free **mocker** (`python3 -m dynamo.mocker`): real router/planner
+# code path, simulated KV-cache + prefill/decode timing. No GPUs, no model weights.
+#
+# Adapted from the REAL upstream example:
+#   github.com/ai-dynamo/dynamo :: examples/backends/mocker/deploy/agg.yaml
+# (upstream field names preserved: componentType, subComponentType, extraPodSpec,
+#  mainContainer, envFromSecret, envs, resources). Adaptations for this lab:
+#   - namespace dynamo; coordination plane wired to the etcd/nats DNS in the shared spec
+#   - model Qwen/Qwen3-0.6B (tokenizer/config only); worker resources shrunk for granular
+#     pod-scaling; KV-aware routing on; DYN_SYSTEM_PORT metrics; OTLP traces -> Tempo
+#   - a Planner service added (upstream mocker example ships none) to observe experiment (B)
+#
+# VERIFY (see fleet/README.md for the full list):
+#   - image tag ${DYNAMO_VERSION}: nvcr.io/nvidia/ai-dynamo/dynamo-planner carries the
+#     mocker wheel and runs CPU-only. Replace `my-tag` upstream used with the pinned release.
+#   - discovery-backend annotation: recent Dynamo defaults to K8s-native discovery
+#     (EndpointSlices + DynamoWorkerMetadata CRDs) and treats etcd as legacy. This lab
+#     pins a 3-node etcd coordination plane, so we opt into etcd discovery explicitly.
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: mocker-agg
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/component: fleet
+    dynamo-lab/topology: aggregated
+  annotations:
+    # VERIFY: exact annotation key/values for selecting the etcd discovery backend against
+    # the pinned Dynamo release (docs/kubernetes/service-discovery.md :: "KV Store Discovery").
+    # Omit this annotation to use the operator's default Kubernetes-native discovery instead.
+    nvidia.com/dynamo-discovery-backend: etcd
+spec:
+  services:
+    # ---------------------------------------------------------------------------------
+    # Frontend: OpenAI-compatible HTTP API on :8000, KV-aware router in front of workers.
+    # ---------------------------------------------------------------------------------
+    Frontend:
+      componentType: frontend
+      replicas: 1
+      envs:
+        # KV-aware routing ON. Requires the NATS event plane (workers publish KV events).
+        - name: DYN_ROUTER_MODE
+          value: kv
+        # --- coordination plane (shared spec DNS) ---
+        # VERIFY: env var names ETCD_ENDPOINTS / NATS_SERVER expected by the runtime, AND
+        # whether the operator already injects these from the platform Helm chart (in which
+        # case these explicit values simply reassert the same endpoints).
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        # --- observability: OTLP traces -> Tempo, JSONL logs -> stdout (promtail -> Loki) ---
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-frontend
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          ports:
+            - containerPort: 8000
+              name: http
+
+    # ---------------------------------------------------------------------------------
+    # Planner: watches load and drives autoscaling of the worker pool via the operator.
+    # This is the subject of experiment (B). KubernetesConnector is selected by
+    # `"environment": "kubernetes"` in the planner config -> the planner edits DGD service
+    # replicas through the Kubernetes API. VirtualConnector (`"environment": "virtual"`) is
+    # the fallback for local/dry-run where no operator is present.
+    # ---------------------------------------------------------------------------------
+    Planner:
+      componentType: planner
+      replicas: 1
+      envs:
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-planner
+      extraPodSpec:
+        mainContainer:
+          # Dynamo >= 1.1.0 requires the dedicated planner image (ships kubernetes_asyncio,
+          # pmdarima, prophet, aiconfigurator that backend runtime images no longer carry).
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          command:
+            - python3
+            - -m
+            - dynamo.planner
+          args:
+            # VERIFY: exact planner --config schema for the pinned release, AND that a mocker
+            # fleet is a valid scaling target. "environment":"kubernetes" -> KubernetesConnector
+            # (edits DGD replicas via the operator). Swap to "virtual" for VirtualConnector.
+            # "backend":"mocker" VERIFY: accepted backend value for a mocker fleet (may need
+            # "vllm" + profile data, or a load-scaling-only config with no SLA target).
+            - --config
+            - >-
+              {"environment": "kubernetes", "backend": "mocker",
+              "optimization_target": "none", "enable_load_scaling": true,
+              "enable_throughput_scaling": false,
+              "load_adjustment_interval_seconds": 10}
+
+    # ---------------------------------------------------------------------------------
+    # MockerWorker: the aggregated worker pool. Each replica does BOTH prefill and decode
+    # (no --disaggregation-mode). Operator scales this pool up/down under the planner.
+    # ---------------------------------------------------------------------------------
+    MockerWorker:
+      componentType: worker
+      replicas: 1
+      # No envFromSecret: Qwen/Qwen3-0.6B is a public model, so no HF token is required to
+      # pull its tokenizer/config. If HuggingFace rate-limits pulls, create an
+      # `hf-token-secret` (key HF_TOKEN) in ns dynamo and add `envFromSecret: hf-token-secret`.
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+        # VERIFY: DGD Resources schema accepts cpu/memory as top-level keys under
+        # requests/limits (upstream examples only demonstrate `gpu` and `custom.<name>`).
+      envs:
+        - name: DYN_SYSTEM_PORT # backend component metrics/health on :8081 (spec)
+          value: "8081"
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-mocker-worker
+        # speedup-ratio configurable via env (spec default 10); referenced from args below
+        # using Kubernetes dependent-env-var expansion ($(VAR)).
+        - name: DYN_MOCKER_SPEEDUP_RATIO
+          value: "10"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          workingDir: /workspace
+          ports:
+            - containerPort: 8081
+              name: metrics
+          command:
+            - python3
+            - -m
+            - dynamo.mocker
+          args:
+            - --model-path
+            - Qwen/Qwen3-0.6B
+            - --model-name
+            - Qwen/Qwen3-0.6B
+            # VERIFY: --num-workers is a valid python3 -m dynamo.mocker flag on the pinned image
+            - --num-workers
+            - "1"
+            - --speedup-ratio
+            - "$(DYN_MOCKER_SPEEDUP_RATIO)"
+            # VERIFY: mocker still requires --planner-profile-data (timing profile shipped in
+            # the image). Path below is the upstream default; confirm it exists in the pinned
+            # image, or drop this flag if the mocker no longer needs it.
+            - --planner-profile-data
+            - /workspace/components/src/dynamo/planner/tests/data/profiling_results/H200_TP1P_TP1D

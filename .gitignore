@@ -1,0 +1,46 @@
+# --- Terraform ---
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# keep the dependency lock committed:
+!**/.terraform.lock.hcl
+
+# --- Kubernetes / cloud ---
+kubeconfig
+*.kubeconfig
+.kube/
+*.pem
+*.key
+
+# --- Python (mocker helpers, bridges) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+
+# --- Node / k6 auxiliary ---
+node_modules/
+
+# --- Logs & scratch ---
+*.log
+tmp/
+.scratch/
+
+# --- OS / editors ---
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,222 @@
+# dynamo-lab :: fleet :: DISAGGREGATED profile  (the headline topology, docs/adr/0007)
+#
+# One DynamoGraphDeployment (DGD) with SEPARATE prefill and decode Mocker worker pools that
+# exchange KV cache. Prefill and decode scale independently, and "kill a prefill worker" vs
+# "kill a decode worker" are genuinely different failure stories — this is the richer thing
+# to observe. Frontend (OpenAI API + KV router) and Planner (autoscaler) as in agg.
+#
+# Adapted from the REAL upstream example:
+#   github.com/ai-dynamo/dynamo :: examples/backends/mocker/deploy/disagg.yaml
+# (upstream field names preserved: componentType, subComponentType, extraPodSpec,
+#  mainContainer, envs, resources, and the --disaggregation-mode prefill|decode arg).
+# Same lab adaptations as fleet/agg.yaml — see that file's header and fleet/README.md.
+#
+# VERIFY (full list in fleet/README.md):
+#   - image tag ${DYNAMO_VERSION} carries the mocker wheel and runs CPU-only
+#   - etcd discovery-backend annotation (recent Dynamo defaults to K8s-native discovery)
+#   - planner --config schema + valid mocker scaling target
+#   - mocker still needs --planner-profile-data; DGD Resources schema accepts cpu/memory
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: mocker-disagg
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/component: fleet
+    dynamo-lab/topology: disaggregated
+  annotations:
+    # VERIFY: etcd discovery-backend annotation for the pinned release (see agg.yaml header).
+    nvidia.com/dynamo-discovery-backend: etcd
+spec:
+  services:
+    # ---------------------------------------------------------------------------------
+    # Frontend: OpenAI-compatible HTTP API on :8000, KV-aware router.
+    # ---------------------------------------------------------------------------------
+    Frontend:
+      componentType: frontend
+      replicas: 1
+      envs:
+        - name: DYN_ROUTER_MODE # KV-aware routing ON (needs NATS event plane)
+          value: kv
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-frontend
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          ports:
+            - containerPort: 8000
+              name: http
+
+    # ---------------------------------------------------------------------------------
+    # Planner: autoscaler (experiment B). In disagg it can scale prefill and decode pools
+    # independently. KubernetesConnector via "environment":"kubernetes"; VirtualConnector
+    # ("environment":"virtual") is the fallback for local/dry-run.
+    # ---------------------------------------------------------------------------------
+    Planner:
+      componentType: planner
+      replicas: 1
+      envs:
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-planner
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          command:
+            - python3
+            - -m
+            - dynamo.planner
+          args:
+            # VERIFY: planner --config schema + valid mocker target (see agg.yaml note).
+            # For disagg the SLA planner normally scales prefill/decode from profiling data;
+            # here we use load-scaling only to keep the lab backend-agnostic.
+            - --config
+            - >-
+              {"environment": "kubernetes", "backend": "mocker",
+              "optimization_target": "none", "enable_load_scaling": true,
+              "enable_throughput_scaling": false,
+              "load_adjustment_interval_seconds": 10}
+
+    # ---------------------------------------------------------------------------------
+    # MockerPrefillWorker: prefill-only pool (--disaggregation-mode prefill).
+    # ---------------------------------------------------------------------------------
+    MockerPrefillWorker:
+      componentType: worker
+      subComponentType: prefill
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      envs:
+        - name: DYN_SYSTEM_PORT
+          value: "8081"
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-mocker-prefill
+        - name: DYN_MOCKER_SPEEDUP_RATIO
+          value: "10"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          workingDir: /workspace
+          ports:
+            - containerPort: 8081
+              name: metrics
+          command:
+            - python3
+            - -m
+            - dynamo.mocker
+          args:
+            - --model-path
+            - Qwen/Qwen3-0.6B
+            - --model-name
+            - Qwen/Qwen3-0.6B
+            # VERIFY: --num-workers is a valid python3 -m dynamo.mocker flag on the pinned image
+            - --num-workers
+            - "1"
+            - --speedup-ratio
+            - "$(DYN_MOCKER_SPEEDUP_RATIO)"
+            - --disaggregation-mode
+            - prefill
+            # VERIFY: mocker --planner-profile-data still required; path shipped in image.
+            - --planner-profile-data
+            - /workspace/components/src/dynamo/planner/tests/data/profiling_results/H200_TP1P_TP1D
+
+    # ---------------------------------------------------------------------------------
+    # MockerDecodeWorker: decode-only pool (--disaggregation-mode decode).
+    # ---------------------------------------------------------------------------------
+    MockerDecodeWorker:
+      componentType: worker
+      subComponentType: decode
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      envs:
+        - name: DYN_SYSTEM_PORT
+          value: "8081"
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-mocker-decode
+        - name: DYN_MOCKER_SPEEDUP_RATIO
+          value: "10"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          workingDir: /workspace
+          ports:
+            - containerPort: 8081
+              name: metrics
+          command:
+            - python3
+            - -m
+            - dynamo.mocker
+          args:
+            - --model-path
+            - Qwen/Qwen3-0.6B
+            - --model-name
+            - Qwen/Qwen3-0.6B
+            # VERIFY: --num-workers is a valid python3 -m dynamo.mocker flag on the pinned image
+            - --num-workers
+            - "1"
+            - --speedup-ratio
+            - "$(DYN_MOCKER_SPEEDUP_RATIO)"
+            - --disaggregation-mode
+            - decode
+            # VERIFY: mocker --planner-profile-data still required; path shipped in image.
+            - --planner-profile-data
+            - /workspace/components/src/dynamo/planner/tests/data/profiling_results/H200_TP1P_TP1D

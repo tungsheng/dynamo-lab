@@ -1,0 +1,109 @@
+# Loki — Helm values for dynamo-lab log storage.
+# Chart: grafana/loki   Namespace: monitoring   Release name: loki
+# Single-binary ("monolithic") mode: one process, filesystem storage. Perfect for
+# a lab; do NOT use this shape for production (no HA, no object store).
+#
+# Service DNS consumed by Grafana + promtail:
+#   http://loki.monitoring.svc.cluster.local:3100
+#
+# VERIFY: pin chart version at install (grafana/loki 6.x). The `deploymentMode:
+#         SingleBinary` + `loki.storage.type: filesystem` keys below are the 6.x
+#         single-binary contract; confirm against the pinned chart.
+
+deploymentMode: SingleBinary
+
+loki:
+  # Auth disabled -> no X-Scope-OrgID tenant header required (lab convenience).
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  # Schema: TSDB + filesystem object store.
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  storage:
+    type: filesystem
+
+  # Lab-sized limits + retention.
+  limits_config:
+    retention_period: 168h          # 7 days
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+    max_query_series: 5000
+    ingestion_rate_mb: 16
+    ingestion_burst_size_mb: 32
+    allow_structured_metadata: true
+    volume_enabled: true
+
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+  # Keep the pod light.
+  querier:
+    max_concurrent: 4
+
+# Single replica, one PVC.
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 15Gi
+    # storageClass: gp3   # VERIFY: set if the cluster default isn't gp3.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# Disable the microservice/SSD components — single-binary only.
+backend:   { replicas: 0 }
+read:      { replicas: 0 }
+write:     { replicas: 0 }
+ingester:  { replicas: 0 }
+querier:   { replicas: 0 }
+queryFrontend:      { replicas: 0 }
+queryScheduler:     { replicas: 0 }
+distributor:        { replicas: 0 }
+compactor:          { replicas: 0 }
+indexGateway:       { replicas: 0 }
+bloomCompactor:     { replicas: 0 }
+bloomGateway:       { replicas: 0 }
+
+# The chart bundles a self-monitoring/canary stack + a MinIO — off for the lab.
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+  lokiCanary:
+    enabled: false
+selfMonitoring:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+minio:
+  enabled: false
+
+# Expose a ServiceMonitor so Prometheus scrapes Loki's own metrics.
+# (Discovered thanks to serviceMonitorSelectorNilUsesHelmValues:false in the
+#  kube-prometheus-stack values.)
+gateway:
+  enabled: false   # single-binary serves 3100 directly; no nginx gateway needed.
+
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false

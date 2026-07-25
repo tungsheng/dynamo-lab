@@ -1,0 +1,63 @@
+# Promtail — Helm values for dynamo-lab log shipping.
+# Chart: grafana/promtail   Namespace: monitoring   Release name: promtail
+# Ships every pod's stdout/stderr into Loki, tagged so Grafana's Logs panels and
+# trace->logs correlation work.
+#
+# NOTE: Promtail is fine for a lab and is the simplest thing that works. Grafana
+#       Alloy (grafana/alloy) is the modern, actively-developed replacement —
+#       Promtail is in LTS/maintenance. If you rebuild this lab later, prefer
+#       Alloy's `loki.source.kubernetes` + `loki.write` pipeline.
+#
+# VERIFY: pin chart version at install (grafana/promtail 6.x).
+
+config:
+  clients:
+    - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+
+  # Scrape config: standard Kubernetes pod discovery with useful labels, plus a
+  # pipeline that lifts a trace_id out of JSON/logfmt lines into a Loki
+  # structured-metadata field so the Loki datasource's derivedFields can link to
+  # Tempo (see values-kube-prometheus-stack.yaml).
+  snippets:
+    pipelineStages:
+      - cri: {}
+      # Best-effort: pull common fields out of JSON app logs. Non-JSON lines pass
+      # through untouched.
+      - match:
+          selector: '{app_kubernetes_io_part_of="dynamo-lab"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  trace_id: trace_id
+            - labels:
+                level:
+            - structured_metadata:
+                trace_id:
+    # Keep the default extra relabel/scrape behaviour; add part-of as a label so
+    # fleet logs are easy to select.
+    extraRelabelConfigs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_part_of]
+        target_label: app_kubernetes_io_part_of
+
+# Runs as a DaemonSet on every node (system + Karpenter workers).
+daemonset:
+  enabled: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+# Expose promtail's own metrics + a ServiceMonitor (discovered cluster-wide).
+serviceMonitor:
+  enabled: true
+
+# Tolerate all taints so logs are collected from tainted Karpenter/spot nodes too.
+tolerations:
+  - operator: Exists
+
+podLabels:
+  app.kubernetes.io/part-of: dynamo-lab

@@ -1,0 +1,27 @@
+# Chaos experiment: kill a prefill worker.
+#
+# Disaggregated-topology experiment (fleet/disagg.yaml). Prefill workers own the
+# prompt-processing half of the split; killing one shows how the router drains and
+# re-pins prefill->decode KV hand-off while the replacement re-registers.
+#
+# In the aggregated topology there are no prefill workers, so this experiment simply
+# matches nothing (Chaos Mesh reports zero targets) — harmless to leave applied.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-prefill
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-target: prefill-worker
+spec:
+  action: pod-kill
+  mode: one
+  gracePeriod: 0
+  selector:
+    namespaces:
+      - dynamo
+    labelSelectors:
+      # VERIFY: operator label contract — sub-component-type value for prefill pools.
+      nvidia.com/dynamo-component-type: worker
+      nvidia.com/dynamo-sub-component-type: prefill

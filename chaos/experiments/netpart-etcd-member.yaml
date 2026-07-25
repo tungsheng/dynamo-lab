@@ -1,0 +1,38 @@
+# Chaos experiment: network-partition one etcd member from its peers.
+#
+# Isolates a single etcd member at the network layer (it stays Running but cannot reach
+# the other members). This is the classic "split brain" pressure test on the quorum:
+# the partitioned member drops out of the raft group, the remaining two keep quorum, and
+# the isolated member rejoins when the partition heals. More revealing than a pod-kill
+# because the process never dies — it just goes silent.
+#
+# selector picks ONE etcd member; target is the etcd peer set. Chaos Mesh installs the
+# partition between the two pod sets.
+# VERIFY: with overlapping labels the selected member is also in `target`; Chaos Mesh
+# partitions distinct pod IPs, so the member is cut off from the OTHER two but not from
+# itself. Confirm the isolated member is the one you expect via `kubectl describe`.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: netpart-etcd-member
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-target: etcd-member
+spec:
+  action: partition
+  direction: both
+  duration: "2m"
+  mode: one            # exactly one etcd member is isolated
+  selector:
+    namespaces:
+      - dynamo
+    labelSelectors:
+      app.kubernetes.io/name: etcd
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - dynamo
+      labelSelectors:
+        app.kubernetes.io/name: etcd

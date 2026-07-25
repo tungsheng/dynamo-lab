@@ -1,0 +1,38 @@
+# Chaos experiment: network latency on the router -> worker path.
+#
+# The KV-aware router runs inside the Frontend component and dispatches requests to the
+# workers over the network. Injecting latency (not loss) on Frontend -> worker traffic
+# lets us watch how added hop latency shows up in TTFT / inter-token latency and whether
+# the router's load balancing reacts. `direction: to` applies the delay only to egress
+# from Frontend toward the workers.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: net-latency-router-worker
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-target: router-to-worker
+spec:
+  action: delay
+  direction: to
+  duration: "3m"
+  mode: all
+  selector:                       # source: the Frontend (hosts the KV-aware router)
+    namespaces:
+      - dynamo
+    labelSelectors:
+      # VERIFY: operator label for the frontend component
+      #   (nvidia.com/dynamo-component-type=frontend).
+      nvidia.com/dynamo-component-type: frontend
+  target:                         # destination: the worker pool(s)
+    mode: all
+    selector:
+      namespaces:
+        - dynamo
+      labelSelectors:
+        nvidia.com/dynamo-component-type: worker
+  delay:
+    latency: "150ms"
+    correlation: "50"
+    jitter: "50ms"

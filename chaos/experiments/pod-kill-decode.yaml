@@ -1,0 +1,30 @@
+# Chaos experiment: kill a decode worker.
+#
+# Observes (A) failure recovery: the operator/Grove should reschedule the killed
+# decode worker; the KV-aware router should reroute in-flight traffic while the
+# replacement registers its lease in etcd and re-subscribes to the NATS event plane.
+#
+# Selects worker pods by the Dynamo operator's name-independent workload-selector
+# contract (component-type + sub-component-type) rather than the DGD name, so the
+# same file works whether the fleet is `mocker-agg` or `mocker-disagg`.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-decode
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/chaos-target: decode-worker
+spec:
+  action: pod-kill
+  mode: one            # a single random decode worker per run
+  gracePeriod: 0
+  selector:
+    namespaces:
+      - dynamo
+    labelSelectors:
+      # VERIFY: operator label contract (deploy/operator/internal/consts/consts.go):
+      #   nvidia.com/dynamo-component-type / nvidia.com/dynamo-sub-component-type.
+      nvidia.com/dynamo-component-type: worker
+      nvidia.com/dynamo-sub-component-type: decode
+  # duration is not set: pod-kill is instantaneous and self-recovers via rescheduling.

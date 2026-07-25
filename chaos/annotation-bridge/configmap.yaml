@@ -1,0 +1,153 @@
+# The chaos annotation bridge script (mounted into the Deployment).
+#
+# Watches Kubernetes Events for chaos-mesh.org objects in the `dynamo` namespace and
+# turns each fault into a Grafana annotation, so every injected fault shows up as a
+# marker on the Dynamo dashboards next to its effect (see ADR-0004).
+#
+# Strategy: chaos-mesh emits Events on its chaos objects with reasons like "Applied"
+# (fault injected) and "Recovered"/"TimeUp"/"Deleted" (fault cleared). We open a REGION
+# annotation on the first "start" reason for a given chaos object and close it (set
+# timeEnd) on the matching "end" reason, keyed by the object UID. If we never saw the
+# start (bridge restarted mid-fault) we fall back to a point annotation.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chaos-annotation-bridge
+  namespace: chaos-mesh
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/name: chaos-annotation-bridge
+data:
+  bridge.py: |
+    import logging
+    import os
+    import sys
+
+    import requests
+    from kubernetes import client, config, watch
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        stream=sys.stdout,
+    )
+    log = logging.getLogger("chaos-annotation-bridge")
+
+    GRAFANA_URL = os.environ["GRAFANA_URL"].rstrip("/")
+    GRAFANA_TOKEN = os.environ.get("GRAFANA_TOKEN", "").strip()
+    GRAFANA_USER = os.environ.get("GRAFANA_USER", "").strip()
+    GRAFANA_PASSWORD = os.environ.get("GRAFANA_PASSWORD", "").strip()
+    WATCH_NAMESPACE = os.environ.get("WATCH_NAMESPACE", "dynamo")
+    EXTRA_TAGS = [t for t in os.environ.get("ANNOTATION_TAGS", "chaos,dynamo-lab").split(",") if t]
+
+    # chaos-mesh Event reasons. These open / close an annotation region.
+    START_REASONS = {"Applied", "Started"}
+    END_REASONS = {"Recovered", "TimeUp", "Deleted", "Finished", "FailedInjection"}
+
+    # in-memory map: chaos-object UID -> Grafana annotation id (the open region).
+    open_regions = {}
+
+
+    def grafana_session():
+        s = requests.Session()
+        s.headers.update({"Content-Type": "application/json"})
+        if GRAFANA_TOKEN:
+            # VERIFY auth: a Grafana service-account token (Bearer) is the modern path;
+            # legacy API keys also work as Bearer. Basic auth is the fallback below.
+            s.headers.update({"Authorization": "Bearer " + GRAFANA_TOKEN})
+        elif GRAFANA_USER and GRAFANA_PASSWORD:
+            s.auth = (GRAFANA_USER, GRAFANA_PASSWORD)
+        else:
+            log.warning("No Grafana credentials set; annotations will fail to post.")
+        return s
+
+
+    SESSION = grafana_session()
+
+
+    def event_millis(event):
+        ts = (
+            event.event_time
+            or event.last_timestamp
+            or event.first_timestamp
+        )
+        if ts is None:
+            import time
+            return int(time.time() * 1000)
+        return int(ts.timestamp() * 1000)
+
+
+    def post_annotation(text, tags, time_ms):
+        body = {"text": text, "tags": tags, "time": time_ms}
+        r = SESSION.post(GRAFANA_URL + "/api/annotations", json=body, timeout=10)
+        r.raise_for_status()
+        return r.json().get("id")
+
+
+    def close_annotation(annotation_id, time_end_ms):
+        body = {"timeEnd": time_end_ms}
+        r = SESSION.patch(
+            GRAFANA_URL + "/api/annotations/" + str(annotation_id),
+            json=body,
+            timeout=10,
+        )
+        r.raise_for_status()
+
+
+    def handle(event):
+        obj = event.involved_object
+        if obj is None or not (obj.api_version or "").startswith("chaos-mesh.org"):
+            return
+        reason = event.reason or ""
+        kind = obj.kind or "Chaos"
+        name = obj.name or "unknown"
+        uid = obj.uid or (obj.namespace + "/" + name)
+        tags = EXTRA_TAGS + [kind, name, reason]
+        text = "[chaos] {kind}/{name}: {reason} - {msg}".format(
+            kind=kind, name=name, reason=reason, msg=(event.message or "")
+        )
+        when = event_millis(event)
+
+        try:
+            if reason in START_REASONS:
+                ann_id = post_annotation(text, tags, when)
+                if ann_id is not None:
+                    open_regions[uid] = ann_id
+                log.info("opened annotation %s for %s/%s", ann_id, kind, name)
+            elif reason in END_REASONS:
+                ann_id = open_regions.pop(uid, None)
+                if ann_id is not None:
+                    close_annotation(ann_id, when)
+                    log.info("closed annotation %s for %s/%s", ann_id, kind, name)
+                else:
+                    # never saw the start; drop a point marker so the end is still visible.
+                    post_annotation(text, tags, when)
+                    log.info("posted point annotation for %s/%s (%s)", kind, name, reason)
+            else:
+                log.debug("ignored reason %s for %s/%s", reason, kind, name)
+        except requests.RequestException as exc:
+            log.error("grafana annotation failed for %s/%s: %s", kind, name, exc)
+
+
+    def main():
+        config.load_incluster_config()
+        v1 = client.CoreV1Api()
+        log.info(
+            "watching Events in ns=%s, posting annotations to %s",
+            WATCH_NAMESPACE,
+            GRAFANA_URL,
+        )
+        w = watch.Watch()
+        while True:
+            try:
+                for item in w.stream(
+                    v1.list_namespaced_event,
+                    namespace=WATCH_NAMESPACE,
+                    timeout_seconds=0,
+                ):
+                    handle(item["object"])
+            except Exception as exc:  # noqa: BLE001 - keep the watcher alive
+                log.warning("watch stream error, restarting: %s", exc)
+
+    if __name__ == "__main__":
+        main()

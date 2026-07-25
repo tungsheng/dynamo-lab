@@ -1,0 +1,56 @@
+# ec2nodeclass.yaml
+# Karpenter EC2NodeClass — the AWS-specific launch template for elastic worker nodes.
+# Applied by scripts (NOT terraform): terraform/main installs the Karpenter controller +
+# IAM/IRSA + interruption SQS + node IAM role via the EKS module's karpenter submodule;
+# this manifest is `kubectl apply`-ed afterward (see scripts/ + Makefile `platform-up`).
+#
+# apiVersion VERIFY: karpenter.k8s.aws/v1 is current for Karpenter >= 1.0. Older 0.3x
+#   clusters used karpenter.k8s.aws/v1beta1 with different field names. The controller
+#   chart version is pinned in terraform/main/karpenter.tf (the source of truth).
+#   VERIFY: confirm latest Karpenter 1.x compatible with cluster_version
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+spec:
+  # Amazon Linux 2023, latest EKS-optimized AMI for the cluster's Kubernetes version.
+  amiSelectorTerms:
+    - alias: al2023@latest      # VERIFY: AL2023 alias supported on the pinned Karpenter version
+
+  # IAM role that launched nodes assume. Karpenter (v1) auto-creates the instance profile from
+  # this role name. The role is created by the terraform karpenter submodule.
+  # The scripts layer substitutes the real name before apply (envsubst).
+  role: "${KARPENTER_NODE_ROLE}"   # e.g. output karpenter.node_iam_role_name from terraform/main
+                                   # VERIFY: exact terraform output name feeding this value
+
+  # Subnet + security-group discovery by tag. The terraform (VPC + EKS/karpenter submodule)
+  # must tag the private subnets and the cluster/node security group with this key/value.
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}      # VERIFY: discovery tag KEY + value match terraform (terraform tags from var.cluster_name)
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}      # VERIFY: discovery tag KEY + value match terraform (terraform tags from var.cluster_name)
+
+  # Small root volume — mocker workers are tiny and stateless.
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 30Gi
+        volumeType: gp3
+        encrypted: true
+        deleteOnTermination: true
+
+  # IMDSv2 only.
+  metadataOptions:
+    httpEndpoint: enabled
+    httpProtocolIPv6: disabled
+    httpPutResponseHopLimit: 1
+    httpTokens: required
+
+  # Tag every Karpenter-launched instance for cost visibility + lab-wide selection.
+  tags:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/provisioned-by: karpenter

@@ -1,0 +1,78 @@
+# The chaos annotation bridge Deployment.
+#
+# A single-replica Python process (python:3.12-slim) that mounts bridge.py from the
+# ConfigMap, pip-installs its two deps at start, and streams chaos-mesh Events into
+# Grafana annotations. Kept deliberately tiny — a lab-grade sidecar to the chaos engine.
+#
+# The pip-install-on-start keeps this repo image-free (no registry/build step). For a
+# hardened setup, bake bridge.py + deps into a pinned image instead and drop the pip line.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-annotation-bridge
+  namespace: chaos-mesh
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/name: chaos-annotation-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chaos-annotation-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: dynamo-lab
+        app.kubernetes.io/name: chaos-annotation-bridge
+    spec:
+      serviceAccountName: chaos-annotation-bridge
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: bridge
+          image: python:3.12-slim   # VERIFY: pin to a digest for reproducibility
+          command: ["/bin/sh", "-c"]
+          args:
+            # Install into a writable emptyDir (the base image's site-packages is not
+            # writable by the non-root user), then run the script against it.
+            - |
+              pip install --no-cache-dir --disable-pip-version-check \
+                --target=/packages \
+                'kubernetes==31.0.0' 'requests==2.32.3' && \
+              exec python /app/bridge.py
+          env:
+            - name: PYTHONPATH
+              value: "/packages"
+            - name: HOME
+              value: "/packages"
+            - name: WATCH_NAMESPACE
+              value: "dynamo"
+            - name: GRAFANA_URL
+              # in-cluster Grafana svc (see shared spec DNS)
+              value: "http://kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80"
+            - name: ANNOTATION_TAGS
+              value: "chaos,dynamo-lab"
+          envFrom:
+            - secretRef:
+                name: chaos-annotation-bridge-grafana
+          volumeMounts:
+            - name: script
+              mountPath: /app
+              readOnly: true
+            - name: packages
+              mountPath: /packages
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+      volumes:
+        - name: script
+          configMap:
+            name: chaos-annotation-bridge
+        - name: packages
+          emptyDir: {}
