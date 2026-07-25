@@ -13,7 +13,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 require_cmd aws kubectl
 ensure_kubeconfig
 
-SYS_NG_DESIRED="${SYS_NG_DESIRED:-2}"
+# 3 to match the system node group size — the etcd HA quorum (3 members, hard
+# anti-affinity) needs 3 distinct nodes, so resume must restore all three.
+SYS_NG_DESIRED="${SYS_NG_DESIRED:-3}"
 KARPENTER_REPLICAS="${KARPENTER_REPLICAS:-1}"
 
 step "Resume: bringing nodes back"
@@ -31,12 +33,21 @@ else
   warn "no managed node group found to scale up"
 fi
 
-# 2. Wait for at least one node to become Ready.
-log "waiting for a system node to register (up to 5m)..."
-if kubectl wait --for=condition=Ready node --all --timeout=300s >/dev/null 2>&1; then
-  ok "nodes Ready"
-else
-  warn "nodes not Ready within timeout — check the EKS console"
+# 2. Wait for at least one node to register AND go Ready. `kubectl wait --all` no-ops (returns
+#    success immediately) when ZERO nodes exist yet — exactly the state right after a
+#    scale-from-0 — so poll for a Ready node instead. The ' Ready ' pattern (surrounding
+#    spaces) matches the STATUS column without also matching 'NotReady'.
+log "waiting for a system node to register and go Ready (up to 5m)..."
+_deadline=$((SECONDS + 300))
+until kubectl get nodes --no-headers 2>/dev/null | grep -q ' Ready '; do
+  if (( SECONDS >= _deadline )); then
+    warn "no node reached Ready within 5m — check the EKS console (continuing anyway)"
+    break
+  fi
+  sleep 5
+done
+if kubectl get nodes --no-headers 2>/dev/null | grep -q ' Ready '; then
+  ok "a system node is Ready"
 fi
 
 # 3. Scale the Karpenter controller back up so it can provision worker capacity.

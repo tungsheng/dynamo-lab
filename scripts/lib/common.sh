@@ -46,8 +46,10 @@ PROJECT="${PROJECT:-dynamo-lab}"
 
 # Pinned Dynamo MOCKER IMAGE tag. Shared with fleet manifests via env. This is the
 # container image tag ONLY — the two Dynamo helm charts version independently (below).
-# VERIFY: latest ai-dynamo release tag that ships the mocker wheel + CPU images.
-DYNAMO_VERSION="${DYNAMO_VERSION:-0.3.2}"
+# Aligned with DYNAMO_PLATFORM_VERSION (1.3.0); the dynamo-planner image (which carries the
+# mocker wheel) needs >= 1.1.0, so the old 0.3.2 tag was invalid for that image.
+# VERIFY: must be a real dynamo-planner image tag that ships the mocker wheel and runs CPU-only.
+DYNAMO_VERSION="${DYNAMO_VERSION:-1.3.0}"
 export DYNAMO_VERSION
 
 # Dynamo helm CHART versions — independent of DYNAMO_VERSION (the mocker image tag) and

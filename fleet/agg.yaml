@@ -77,10 +77,16 @@ spec:
           value: dynamo-frontend
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # VERIFY: dynamo-planner tag ships the mocker wheel + runs CPU-only
           ports:
             - containerPort: 8000
               name: http
+            # Named `metrics` port so podmonitor-fleet.yaml (which scrapes port name `metrics`)
+            # can reach the Frontend, not just the workers.
+            # VERIFY: frontend metrics port — the spec pins DYN_SYSTEM_PORT=8081; the Frontend
+            # may also need DYN_SYSTEM_PORT=8081 in its envs for this endpoint to actually bind.
+            - containerPort: 8081
+              name: metrics
 
     # ---------------------------------------------------------------------------------
     # Planner: watches load and drives autoscaling of the worker pool via the operator.
@@ -118,7 +124,13 @@ spec:
         mainContainer:
           # Dynamo >= 1.1.0 requires the dedicated planner image (ships kubernetes_asyncio,
           # pmdarima, prophet, aiconfigurator that backend runtime images no longer carry).
-          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # VERIFY: dynamo-planner tag ships the mocker wheel + runs CPU-only
+          ports:
+            # Named `metrics` port so podmonitor-fleet.yaml can scrape the Planner too.
+            # VERIFY: planner exposes DYN_SYSTEM_PORT (8081) metrics; may also need
+            # DYN_SYSTEM_PORT=8081 in the Planner envs for this endpoint to bind.
+            - containerPort: 8081
+              name: metrics
           command:
             - python3
             - -m
@@ -132,7 +144,7 @@ spec:
             - --config
             - >-
               {"environment": "kubernetes", "backend": "mocker",
-              "optimization_target": "none", "enable_load_scaling": true,
+              "optimization_target": "load", "enable_load_scaling": true,
               "enable_throughput_scaling": false,
               "load_adjustment_interval_seconds": 10}
 
@@ -177,8 +189,20 @@ spec:
         - name: DYN_MOCKER_SPEEDUP_RATIO
           value: "10"
       extraPodSpec:
+        # Steer ONLY the mocker workers onto the Karpenter `workers` NodePool (ADR 0008),
+        # which is tainted dynamo-lab/workers=true:NoSchedule. Frontend/Planner stay on the
+        # untainted system nodes (they carry no nodeSelector/toleration).
+        # VERIFY: extraPodSpec is the DGD pod-spec override, and nodeSelector + tolerations
+        # (pod-level fields) merge into the worker Pod here. Some releases may nest these
+        # differently (e.g. under a podSpec/podOverride key) — confirm against the operator.
+        nodeSelector:
+          dynamo-lab/node-pool: workers
+        tolerations:
+          - key: dynamo-lab/workers
+            value: "true"
+            effect: NoSchedule
         mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag # VERIFY: pin ${DYNAMO_VERSION}
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # VERIFY: dynamo-planner tag ships the mocker wheel + runs CPU-only
           workingDir: /workspace
           ports:
             - containerPort: 8081

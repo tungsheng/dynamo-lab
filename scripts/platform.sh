@@ -34,12 +34,13 @@ ETCD_CHART_VERSION="${ETCD_CHART_VERSION:-10.7.1}"     # VERIFY: bitnami etcd ch
 NATS_CHART_VERSION="${NATS_CHART_VERSION:-1.2.11}"     # VERIFY: nats/nats chart version
 
 # Dynamo operator + CRDs.
-# VERIFY: exact chart source for the pinned Dynamo release. NVIDIA publishes the
-# Kubernetes Platform either from the repo's deploy/helm dir or an OCI/NGC
-# registry — confirm against github.com/ai-dynamo/dynamo for DYNAMO_VERSION.
-DYNAMO_HELM_OCI="${DYNAMO_HELM_OCI:-oci://nvcr.io/nvidia/ai-dynamo}"   # VERIFY
-DYNAMO_CRDS_CHART="${DYNAMO_CRDS_CHART:-${DYNAMO_HELM_OCI}/dynamo-crds}"        # VERIFY
-DYNAMO_OPERATOR_CHART="${DYNAMO_OPERATOR_CHART:-${DYNAMO_HELM_OCI}/dynamo-platform}"  # VERIFY: chart name (dynamo-platform vs dynamo-operator)
+# NGC serves these Helm charts over HTTPS (`helm repo add`), NOT oci:// — see
+# platform/operator/README.md + values-dynamo-platform.yaml. The repo is added in
+# add_repos() and the charts are installed by reference (<repo>/<chart>) in install_operator.
+# VERIFY: registry URL + chart names (dynamo-crds / dynamo-platform) for the pinned release.
+REPO_DYNAMO="${REPO_DYNAMO:-https://helm.ngc.nvidia.com/nvidia/ai-dynamo}"   # VERIFY
+DYNAMO_CRDS_CHART="${DYNAMO_CRDS_CHART:-nvidia-ai-dynamo/dynamo-crds}"        # VERIFY
+DYNAMO_OPERATOR_CHART="${DYNAMO_OPERATOR_CHART:-nvidia-ai-dynamo/dynamo-platform}"  # VERIFY: chart name (dynamo-platform vs dynamo-operator)
 
 # Observability.
 KPS_VERSION="${KPS_VERSION:-66.3.1}"          # VERIFY: kube-prometheus-stack chart version
@@ -63,6 +64,8 @@ add_repos() {
   helm repo add grafana             "$REPO_GRAFANA" >/dev/null 2>&1 || true
   helm repo add nats                "$REPO_NATS"    >/dev/null 2>&1 || true
   helm repo add chaos-mesh          "$REPO_CHAOS"   >/dev/null 2>&1 || true
+  # NGC Dynamo charts over HTTPS (public, anonymous-pullable) — NOT an oci:// registry.
+  helm repo add nvidia-ai-dynamo    "$REPO_DYNAMO"  >/dev/null 2>&1 || true
   helm repo update >/dev/null
   ok "helm repos ready"
 }
@@ -74,6 +77,16 @@ create_namespaces() {
     ensure_namespace "$ns"
     ok "namespace ${ns}"
   done
+}
+
+# --- Default StorageClass -------------------------------------------------
+# Cluster-scoped gp3 default so every persistence PVC (etcd, NATS, Prometheus, Loki, Tempo)
+# binds to an encrypted gp3 volume instead of an implicit/absent default. EKS's ebs-csi addon
+# ships no default StorageClass, so this must exist BEFORE any chart with persistence.
+install_storageclass() {
+  step "Default StorageClass (gp3, encrypted)"
+  apply_manifests "$PLATFORM_DIR/storageclass-gp3.yaml"
+  ok "gp3 StorageClass applied"
 }
 
 # --- Coordination plane ---------------------------------------------------
@@ -231,6 +244,7 @@ install_karpenter() {
 # --------------------------------------------------------------------------
 platform_up() {
   ensure_kubeconfig
+  install_storageclass
   add_repos
   create_namespaces
   install_coordination

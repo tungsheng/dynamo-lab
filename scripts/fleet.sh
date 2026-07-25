@@ -20,6 +20,13 @@ esac
 MANIFEST="${FLEET_DIR}/${PROFILE}.yaml"
 export PROFILE DYNAMO_VERSION CLUSTER_NAME REGION
 
+# Label KEY the operator stamps on fleet component pods (frontend/worker/planner). Used as an
+# existence selector (`-l <key>`) for readiness + status. Must match the key selected by
+# platform/observability/podmonitor-fleet.yaml. The old app.kubernetes.io/part-of=dynamo-lab
+# selector matched nothing on operator-created pods, so waits/status were empty.
+# VERIFY: operator component-type label key on the pinned release.
+FLEET_POD_SELECTOR="${FLEET_POD_SELECTOR:-nvidia.com/dynamo-component-type}"
+
 fleet_up() {
   ensure_kubeconfig
   [[ -f "$MANIFEST" ]] || die "fleet manifest not found: ${MANIFEST}"
@@ -39,14 +46,24 @@ fleet_up() {
     ok "DynamoGraphDeployment reports Ready"
   else
     warn "DGD Ready condition not observed — falling back to pod readiness"
-    kubectl -n "$NS_DYNAMO" wait --for=condition=Ready pod \
-      -l app.kubernetes.io/part-of=dynamo-lab --timeout=600s \
-      || warn "some fleet pods did not reach Ready within timeout"
+    # Guard the zero-match case: `kubectl wait` on a selector that matches NO pods can return
+    # success (nothing to wait for), which would falsely report the fleet ready. Only wait if
+    # the operator has actually created fleet pods; otherwise warn.
+    local pod_count
+    pod_count="$(kubectl -n "$NS_DYNAMO" get pods -l "$FLEET_POD_SELECTOR" \
+      --no-headers 2>/dev/null | grep -c . || true)"
+    if [[ "${pod_count:-0}" -eq 0 ]]; then
+      warn "no fleet pods match -l ${FLEET_POD_SELECTOR} yet — operator may not have created them; not treating as ready"
+    else
+      kubectl -n "$NS_DYNAMO" wait --for=condition=Ready pod \
+        -l "$FLEET_POD_SELECTOR" --timeout=600s \
+        || warn "some fleet pods did not reach Ready within timeout"
+    fi
   fi
 
   step "Fleet status"
   kubectl -n "$NS_DYNAMO" get dynamographdeployment 2>/dev/null || true
-  kubectl -n "$NS_DYNAMO" get pods -l app.kubernetes.io/part-of=dynamo-lab
+  kubectl -n "$NS_DYNAMO" get pods -l "$FLEET_POD_SELECTOR"
 }
 
 fleet_down() {

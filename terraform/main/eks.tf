@@ -1,6 +1,6 @@
 # terraform/main/eks.tf
 #
-# EKS cluster + a small SYSTEM managed node group (2x m7i.large) that hosts controllers and
+# EKS cluster + a small SYSTEM managed node group (3x m7i.large) that hosts controllers and
 # the observability stack. Elastic worker capacity is provisioned by Karpenter (karpenter.tf
 # + platform/karpenter/ manifests), NOT by this node group — see ADR 0008.
 #
@@ -53,6 +53,20 @@ module "eks" {
       capacity_type  = "ON_DEMAND"
 
       ami_type = "AL2023_x86_64_STANDARD" # VERIFY: AL2023 standard x86_64 EKS-optimized AMI
+
+      # Encrypt the root EBS volume explicitly (the gp3 StorageClass from I5 covers PVC
+      # encryption; this covers the node's own disk).
+      block_device_mappings = {
+        xvda = {
+          device_name = "/dev/xvda"
+          ebs = {
+            volume_size           = 50
+            volume_type           = "gp3"
+            encrypted             = true
+            delete_on_termination = true
+          }
+        }
+      }
 
       min_size     = var.system_node_min_size
       max_size     = var.system_node_max_size

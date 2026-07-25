@@ -1,0 +1,23 @@
+# storageclass-gp3.yaml
+# Default StorageClass for the lab. Every StatefulSet/persistence PVC (etcd, NATS,
+# Prometheus, Loki, Tempo) binds through this instead of relying on an implicit default —
+# EKS's aws-ebs-csi-driver addon ships NO default StorageClass on its own.
+#
+# gp3 (cheaper + independently tunable IOPS/throughput vs gp2), encrypted at rest, and
+# WaitForFirstConsumer so the volume is created in the same AZ as the pod that claims it.
+# Applied FIRST by scripts (platform.sh platform_up) so later charts have a default to bind.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete

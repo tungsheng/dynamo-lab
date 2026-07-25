@@ -1,5 +1,5 @@
 # nodepool.yaml
-# Karpenter NodePool — the elastic WORKER capacity for the fleet. The 2x m7i.large system
+# Karpenter NodePool — the elastic WORKER capacity for the fleet. The 3x m7i.large system
 # managed node group (terraform) hosts controllers + observability; Karpenter provisions
 # everything else, so a big traffic spike scales pods and then NODES. See ADR
 # docs/adr/0008-karpenter-node-autoscaling.md.
@@ -19,6 +19,13 @@ spec:
         app.kubernetes.io/part-of: dynamo-lab
         dynamo-lab/node-pool: workers
     spec:
+      # Taint worker nodes so ONLY pods that tolerate dynamo-lab/workers land here (ADR 0008).
+      # The mocker workers add a matching toleration + nodeSelector (fleet/*.yaml); Frontend,
+      # Planner, and the k6 Job carry neither, so they stay on the untainted system node group.
+      taints:
+        - key: dynamo-lab/workers
+          value: "true"
+          effect: NoSchedule
       # CPU-only lab: no GPUs. Restrict to c7i (compute) + m7i (general) families, amd64/linux.
       requirements:
         - key: karpenter.k8s.aws/instance-family

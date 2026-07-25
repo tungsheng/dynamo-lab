@@ -43,15 +43,15 @@ variable "system_node_instance_type" {
 }
 
 variable "system_node_desired_size" {
-  description = "Desired size of the system managed node group."
+  description = "Desired size of the system managed node group. Default 3 so the etcd 3-member quorum (hard podAntiAffinity, ADR 0003) can schedule across distinct nodes."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "system_node_min_size" {
-  description = "Minimum size of the system managed node group. `make pause` does NOT change this variable; it scales the node group imperatively via `aws eks update-nodegroup-config` (the next `terraform apply` reconciles that drift back to this value)."
+  description = "Minimum size of the system managed node group. Default 3 to keep the etcd 3-member quorum schedulable (ADR 0003). `make pause` does NOT change this variable; it scales the node group imperatively via `aws eks update-nodegroup-config` (the next `terraform apply` reconciles that drift back to this value)."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "system_node_max_size" {

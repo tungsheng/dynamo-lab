@@ -1,7 +1,7 @@
 # platform/karpenter — elastic worker node autoscaling
 
 Karpenter provisions the fleet's **elastic worker capacity** (CPU families, spot + on-demand).
-The 2x `m7i.large` system managed node group (terraform) keeps hosting controllers and the
+The 3x `m7i.large` system managed node group (terraform) keeps hosting controllers and the
 observability stack; Karpenter only grows/shrinks the worker nodes so a large enough traffic
 spike scales pods and then **nodes**. See ADR `docs/adr/0008-karpenter-node-autoscaling.md`.
 

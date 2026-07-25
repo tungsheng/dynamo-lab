@@ -33,7 +33,7 @@ if [[ -n "$NG" && "$NG" != "None" ]]; then
   log "scaling system node group '${NG}' to desired=0"
   aws eks update-nodegroup-config --cluster-name "$CLUSTER_NAME" --region "$REGION" \
     --nodegroup-name "$NG" \
-    --scaling-config minSize=0,maxSize=2,desiredSize=0 >/dev/null
+    --scaling-config minSize=0,maxSize=3,desiredSize=0 >/dev/null
   ok "system node group scaling to 0 (takes a few minutes to drain)"
 else
   warn "no managed node group found to scale down"
