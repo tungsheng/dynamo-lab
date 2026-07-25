@@ -8,8 +8,9 @@ deployed to Amazon EKS, built to *watch* an inference **fleet**:
 - **(C) hold up under traffic spikes** — programmable k6 load profiles
 
 Workers are simulated with Dynamo's **mocker** engine, so the whole thing runs on cheap
-CPU-only nodes — no GPUs. See [`CONTEXT.md`](CONTEXT.md) for the vocabulary and
-[`docs/adr/`](docs/adr/) for why each choice was made.
+CPU-only nodes — no GPUs. See [`CONTEXT.md`](CONTEXT.md) for the vocabulary,
+[`docs/adr/`](docs/adr/) for why each choice was made, and [`PROGRESS.md`](PROGRESS.md) for
+build status and the checklist to resolve before the first `make up`.
 
 ## Architecture
 

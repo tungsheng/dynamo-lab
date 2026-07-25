@@ -29,12 +29,11 @@ else
   log "state bucket does not exist yet — will be created by terraform/bootstrap"
 fi
 
-# terraform/bootstrap is expected to accept: region, bucket_name.
-# (These are passed as -var; terraform emits a harmless warning for any it does
-#  not declare, so this stays robust if the module computes the name itself.)
+# terraform/bootstrap declares only `region` and `project`; it computes the bucket
+# name itself as ${project}-tfstate-<account_id> (see terraform/bootstrap/main.tf),
+# which state_bucket() mirrors. Pass region only — there is no bucket_name variable.
 terraform -chdir="$TF_BOOTSTRAP_DIR" init -input=false >/dev/null
 terraform -chdir="$TF_BOOTSTRAP_DIR" apply -input=false -auto-approve \
-  -var "region=${REGION}" \
-  -var "bucket_name=${BUCKET}"
+  -var "region=${REGION}"
 
 ok "state bucket ready: ${BUCKET}"

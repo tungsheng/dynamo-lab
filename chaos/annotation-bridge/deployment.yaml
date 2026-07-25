@@ -66,10 +66,12 @@ spec:
           resources:
             requests:
               cpu: "50m"
-              memory: "64Mi"
+              # 128Mi: the container pip-installs its deps at startup (see args above),
+              # which transiently needs headroom; too low a limit risks OOMKill on start.
+              memory: "128Mi"
             limits:
               cpu: "200m"
-              memory: "128Mi"
+              memory: "256Mi"
       volumes:
         - name: script
           configMap:

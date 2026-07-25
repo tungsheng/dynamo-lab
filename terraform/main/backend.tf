@@ -18,7 +18,7 @@ terraform {
     # key    = "main/terraform.tfstate"   # supplied via -backend-config
     # bucket = "dynamo-lab-tfstate-<acct>" # supplied via -backend-config
     # region = "us-west-2"                 # supplied via -backend-config
-    use_lockfile = true   # native S3 locking — static (not environment-specific)
+    use_lockfile = true # native S3 locking — static (not environment-specific)
     encrypt      = true
   }
 }

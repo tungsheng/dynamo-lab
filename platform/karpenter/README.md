@@ -37,9 +37,9 @@ spike scales pods and then **nodes**. See ADR `docs/adr/0008-karpenter-node-auto
 
 ```sh
 # Controller must already be installed by terraform (chart oci://public.ecr.aws/karpenter/karpenter).
-# VERIFY: pin the Karpenter chart version in terraform (~1.14 at build time).
+# VERIFY: pin the Karpenter chart version in terraform (1.0.8 at build time).
 
-export KARPENTER_NODE_ROLE="$(terraform -chdir=terraform/main output -raw karpenter_node_role_name)"
+export KARPENTER_NODE_ROLE="$(terraform -chdir=terraform/main output -raw karpenter_node_iam_role_name)"
 envsubst < platform/karpenter/ec2nodeclass.yaml | kubectl apply -f -
 kubectl apply -f platform/karpenter/nodepool.yaml
 

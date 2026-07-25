@@ -14,7 +14,7 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-require_cmd kubectl helm aws
+require_cmd kubectl helm aws envsubst
 
 ACTION="${1:-up}"
 
@@ -50,9 +50,9 @@ PROMTAIL_VERSION="${PROMTAIL_VERSION:-6.16.6}" # VERIFY: grafana/promtail chart 
 # Chaos Mesh.
 CHAOS_VERSION="${CHAOS_VERSION:-2.6.5}"       # VERIFY: chaos-mesh chart version
 
-# Karpenter (controller chart version MUST match the Karpenter IAM/node version
-# provisioned by terraform/main's karpenter submodule).
-KARPENTER_VERSION="${KARPENTER_VERSION:-1.1.1}"  # VERIFY: karpenter chart version (align with terraform)
+# NOTE: the Karpenter controller chart version is NOT pinned here — Terraform owns the
+# controller helm_release (terraform/main/karpenter.tf, chart 1.0.8). This script only
+# applies the NodePool + EC2NodeClass.
 
 HELM_WAIT_TIMEOUT="${HELM_WAIT_TIMEOUT:-10m}"
 
@@ -122,13 +122,13 @@ install_operator() {
   # CRDs first, then the platform/operator chart. The CRDs chart ships no lab
   # values overrides, so no -f flags here.
   helm upgrade --install "$REL_DYNAMO_CRDS" "$DYNAMO_CRDS_CHART" \
-    --version "$DYNAMO_VERSION" -n "$NS_DYNAMO_SYSTEM" \
+    --version "$DYNAMO_CRDS_VERSION" -n "$NS_DYNAMO_SYSTEM" \
     --wait --timeout "$HELM_WAIT_TIMEOUT"
   ok "dynamo CRDs installed"
 
   # shellcheck disable=SC2046
   helm upgrade --install "$REL_DYNAMO_OPERATOR" "$DYNAMO_OPERATOR_CHART" \
-    --version "$DYNAMO_VERSION" -n "$NS_DYNAMO_SYSTEM" \
+    --version "$DYNAMO_PLATFORM_VERSION" -n "$NS_DYNAMO_SYSTEM" \
     $(values_args "$PLATFORM_DIR/operator/values-dynamo-platform.yaml") \
     --wait --timeout "$HELM_WAIT_TIMEOUT"
   ok "dynamo operator installed"
@@ -186,6 +186,11 @@ install_observability() {
   else
     warn "no platform/observability/grafana/dashboards directory — skipping dashboard ConfigMaps"
   fi
+
+  # Fleet PodMonitor: the operator ships none for the mocker fleet, so we provide one.
+  log "applying fleet PodMonitor"
+  apply_manifests "$PLATFORM_DIR/observability/podmonitor-fleet.yaml"
+  ok "fleet PodMonitor applied"
 }
 
 # --- Chaos Mesh -----------------------------------------------------------
@@ -197,7 +202,7 @@ install_chaos_mesh() {
     --version "$CHAOS_VERSION" -n "$NS_CHAOS" \
     --set dashboard.create=true \
     --set prometheus.enabled=true \
-    $(values_args "$PLATFORM_DIR/chaos-mesh/values.yaml") \
+    $(values_args "$PLATFORM_DIR/chaos-mesh/values-chaos-mesh.yaml") \
     --wait --timeout "$HELM_WAIT_TIMEOUT"
   ok "chaos-mesh installed"
 }
@@ -213,8 +218,6 @@ install_karpenter() {
   # VERIFY: this output name matches terraform/main.
   KARPENTER_NODE_ROLE="$(tf_output karpenter_node_iam_role_name)"
   export CLUSTER_NAME KARPENTER_NODE_ROLE
-  # Alias for manifests that use the module's own output name verbatim.
-  export KARPENTER_NODE_IAM_ROLE_NAME="$KARPENTER_NODE_ROLE"
 
   [[ -n "$KARPENTER_NODE_ROLE" ]] || warn "karpenter_node_iam_role_name empty — EC2NodeClass will not resolve a node role (is terraform/main applied?)"
 

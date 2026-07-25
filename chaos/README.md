@@ -24,7 +24,7 @@ chaos/
   annotation-bridge/               # chaos events -> Grafana annotations
     configmap.yaml                 # the watcher script (bridge.py)
     rbac.yaml                      # ServiceAccount + Role/RoleBinding
-    secret.yaml                    # Grafana credentials PLACEHOLDER
+    secret.example.yaml            # Grafana credentials PLACEHOLDER (copy, don't apply as-is)
     deployment.yaml                # the bridge Deployment
   README.md
 ```
@@ -104,7 +104,8 @@ Install:
 # 1. Provide Grafana credentials (do NOT commit real ones):
 kubectl -n chaos-mesh create secret generic chaos-annotation-bridge-grafana \
   --from-literal=GRAFANA_TOKEN=<grafana-service-account-token>
-#    (or edit chaos/annotation-bridge/secret.yaml)
+#    (or copy chaos/annotation-bridge/secret.example.yaml to secret.yaml, fill it in,
+#     and apply it — chaos-start skips *example* files so the placeholder is never applied)
 
 # 2. Apply RBAC + config + workload:
 kubectl apply -f chaos/annotation-bridge/rbac.yaml

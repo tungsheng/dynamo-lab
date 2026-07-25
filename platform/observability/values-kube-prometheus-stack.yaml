@@ -6,8 +6,9 @@
 #
 # Goals for this lab:
 #  * Let k6 push results in via Prometheus remote-write.
-#  * Discover ServiceMonitors/PodMonitors in ALL namespaces (Dynamo operator
-#    creates PodMonitors in the `dynamo` namespace; etcd/nats/chaos-mesh export too).
+#  * Discover ServiceMonitors/PodMonitors in ALL namespaces. VERIFY: the Dynamo operator
+#    is NOT confirmed to ship fleet PodMonitors in `dynamo` (fleet/README.md), so this lab
+#    provides platform/observability/podmonitor-fleet.yaml; etcd/nats/chaos-mesh export too.
 #  * Provision Grafana with Prometheus (built-in) + Tempo + Loki datasources wired
 #    for traces<->logs<->metrics correlation.
 #  * Modest, lab-sized retention so idle cost stays low.
@@ -141,6 +142,9 @@ grafana:
           spanEndTimeShift: 5m
           filterByTraceID: true
           filterBySpanID: false
+          # Maps span service.name -> Loki label `service_name`. Promtail must emit
+          # that label (see the service_name relabel in values-promtail.yaml), and it
+          # must equal the span's service.name for these jumps to match.
           tags:
             - key: service.name
               value: service_name
@@ -170,7 +174,8 @@ grafana:
     feature_toggles:
       enable: traceqlEditor traceToMetrics
     # Allow the chaos-annotation bridge (in-cluster) to POST Grafana annotations.
-    # It authenticates with the admin creds above against the Grafana HTTP API.
+    # It authenticates with its OWN `chaos-annotation-bridge-grafana` Secret (a Grafana
+    # service-account token, or basic-auth fallback) — NOT the admin creds above.
     log:
       level: info
 

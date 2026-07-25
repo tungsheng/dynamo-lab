@@ -36,6 +36,13 @@ spec:
     Frontend:
       componentType: frontend
       replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
       envs:
         - name: DYN_ROUTER_MODE # KV-aware routing ON (needs NATS event plane)
           value: kv
@@ -68,6 +75,13 @@ spec:
     Planner:
       componentType: planner
       replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
       envs:
         - name: ETCD_ENDPOINTS
           value: http://etcd.dynamo.svc.cluster.local:2379

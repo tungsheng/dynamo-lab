@@ -49,7 +49,7 @@ variable "system_node_desired_size" {
 }
 
 variable "system_node_min_size" {
-  description = "Minimum size of the system managed node group. Set to 0 by `make pause`."
+  description = "Minimum size of the system managed node group. `make pause` does NOT change this variable; it scales the node group imperatively via `aws eks update-nodegroup-config` (the next `terraform apply` reconciles that drift back to this value)."
   type        = number
   default     = 2
 }

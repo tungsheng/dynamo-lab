@@ -15,8 +15,10 @@ require_cmd kubectl
 ACTION="${1:-start}"
 
 SCHEDULE_MANIFEST="${CHAOS_DIR}/schedule-monkey.yaml"
-# The annotation bridge is a directory of manifests (configmap/deployment/rbac/
-# secret); apply_manifests/delete_manifests apply every *.yaml under it.
+# The annotation bridge is a directory of manifests (configmap/deployment/rbac);
+# apply_manifests/delete_manifests apply every *.yaml under it EXCEPT the
+# secret.example.yaml placeholder (skipped as *example*). Provide the real
+# chaos-annotation-bridge-grafana Secret out-of-band (see secret.example.yaml).
 BRIDGE_MANIFEST="${CHAOS_DIR}/annotation-bridge"
 
 export CLUSTER_NAME REGION

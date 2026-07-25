@@ -17,7 +17,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/part-of: dynamo-lab
-        dynamo-lab/pool: workers
+        dynamo-lab/node-pool: workers
     spec:
       # CPU-only lab: no GPUs. Restrict to c7i (compute) + m7i (general) families, amd64/linux.
       requirements:

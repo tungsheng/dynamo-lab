@@ -40,10 +40,20 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-$REGION}"
 
 CLUSTER_NAME="${CLUSTER_NAME:-dynamo-lab}"
 
-# Pinned Dynamo platform/mocker release. Shared with fleet manifests via env.
+# Project name — used to derive the Terraform state bucket. MUST match terraform's
+# `project` var default (terraform/bootstrap/main.tf computes ${project}-tfstate-<acct>).
+PROJECT="${PROJECT:-dynamo-lab}"
+
+# Pinned Dynamo MOCKER IMAGE tag. Shared with fleet manifests via env. This is the
+# container image tag ONLY — the two Dynamo helm charts version independently (below).
 # VERIFY: latest ai-dynamo release tag that ships the mocker wheel + CPU images.
 DYNAMO_VERSION="${DYNAMO_VERSION:-0.3.2}"
 export DYNAMO_VERSION
+
+# Dynamo helm CHART versions — independent of DYNAMO_VERSION (the mocker image tag) and
+# of each other. See platform/operator/README.md (dynamo-crds 0.9.1, dynamo-platform 1.3.0).
+DYNAMO_CRDS_VERSION="${DYNAMO_CRDS_VERSION:-0.9.1}"       # VERIFY: dynamo-crds chart version
+DYNAMO_PLATFORM_VERSION="${DYNAMO_PLATFORM_VERSION:-1.3.0}" # VERIFY: dynamo-platform chart version
 
 # --------------------------------------------------------------------------
 # Load-test fleet topology selector (INDEPENDENT of the k6 traffic PROFILE)
@@ -98,15 +108,20 @@ REL_KARPENTER="karpenter"
 # Terraform state (S3 backend, native locking) — see SHARED SPEC / ADR 0006
 # --------------------------------------------------------------------------
 TF_STATE_KEY="main/terraform.tfstate"
-# Bucket name is deterministic: dynamo-lab-tfstate-<AWS_ACCOUNT_ID>.
+# Bucket name is deterministic: <PROJECT>-tfstate-<AWS_ACCOUNT_ID>.
 # Computed lazily via state_bucket() because it needs the account id.
 
 # --------------------------------------------------------------------------
 # Template rendering whitelist
 # --------------------------------------------------------------------------
 # Only these ${VAR} references are substituted when we render manifests, so we
-# never accidentally mangle other '$' occurrences in third-party YAML.
-RENDER_VARS='${CLUSTER_NAME} ${REGION} ${AWS_REGION} ${DYNAMO_VERSION} ${PROFILE} ${FRONTEND_URL} ${KARPENTER_NODE_ROLE} ${KARPENTER_NODE_IAM_ROLE_NAME} ${KARPENTER_QUEUE} ${KARPENTER_ROLE_ARN}'
+# never accidentally mangle other '$' occurrences in third-party YAML. Pruned to the
+# vars actually referenced by a manifest (verified by grepping platform/ fleet/ chaos/ load/).
+# Only tokens that appear as ${VAR} in a manifest belong here. The k6 job's env
+# block uses distinct ${K6_*} tokens so envsubst never rewrites the identical
+# ${PROFILE}/${FRONTEND_URL}/${MODEL} JavaScript template literals in the embedded
+# k6 script (those are resolved by the k6 runtime from __ENV, not at render time).
+RENDER_VARS='${CLUSTER_NAME} ${DYNAMO_VERSION} ${K6_PROFILE} ${K6_FRONTEND_URL} ${KARPENTER_NODE_ROLE}'
 
 # --------------------------------------------------------------------------
 # Logging helpers
@@ -152,9 +167,10 @@ aws_account_id() {
   printf '%s' "$_AWS_ACCOUNT_ID"
 }
 
-# state_bucket — deterministic Terraform state bucket name.
+# state_bucket — deterministic Terraform state bucket name. Matches the name that
+# terraform/bootstrap computes: ${var.project}-tfstate-<account_id>.
 state_bucket() {
-  printf 'dynamo-lab-tfstate-%s' "$(aws_account_id)"
+  printf '%s-tfstate-%s' "$PROJECT" "$(aws_account_id)"
 }
 
 # ensure_kubeconfig — point kubectl at the EKS cluster (idempotent).
@@ -181,14 +197,13 @@ ensure_namespace() {
 }
 
 # render — pass stdin through envsubst restricted to RENDER_VARS.
-# Falls back to a plain copy if envsubst is unavailable (manifests without
-# ${VAR} placeholders are unaffected either way).
+# envsubst is REQUIRED: manifests like ec2nodeclass.yaml / k6-job.yaml carry ${VAR}
+# placeholders that MUST be expanded. A silent `cat` fallback would apply them with
+# literal, unexpanded placeholders (a broken node role, a broken frontend URL), so we
+# fail loudly instead.
 render() {
-  if have envsubst; then
-    envsubst "$RENDER_VARS"
-  else
-    cat
-  fi
+  have envsubst || die "envsubst not found — install gettext (macOS: brew install gettext; Debian/Ubuntu: apt-get install gettext-base)"
+  envsubst "$RENDER_VARS"
 }
 
 # apply_manifests <path> — kubectl apply a file, or every *.yaml/*.yml in a
@@ -205,6 +220,7 @@ apply_manifests() {
     for f in "$target"/*.yaml "$target"/*.yml; do
       case "$(basename "$f")" in
         *values*) continue ;;
+        *example*) continue ;;   # e.g. secret.example.yaml — a placeholder to copy, not apply
       esac
       render < "$f" | kubectl apply -f -
       found=1
@@ -229,6 +245,7 @@ delete_manifests() {
     for f in "$target"/*.yaml "$target"/*.yml; do
       case "$(basename "$f")" in
         *values*) continue ;;
+        *example*) continue ;;   # e.g. secret.example.yaml — a placeholder to copy, not apply
       esac
       render < "$f" | kubectl delete --ignore-not-found -f - || true
     done

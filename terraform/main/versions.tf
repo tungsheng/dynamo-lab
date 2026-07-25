@@ -4,7 +4,7 @@
 # (partial config — bucket/key/region supplied at `init` via -backend-config).
 
 terraform {
-  required_version = ">= 1.9.0" # native S3 state locking (use_lockfile) needs >= 1.9
+  required_version = ">= 1.10.0" # native S3 state locking (use_lockfile, see backend.tf) needs >= 1.10
 
   required_providers {
     aws = {
@@ -18,14 +18,6 @@ terraform {
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "~> 2.32" # VERIFY: latest hashicorp/kubernetes 2.x
-    }
-    tls = {
-      source  = "hashicorp/tls"
-      version = "~> 4.0"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
     }
   }
 }

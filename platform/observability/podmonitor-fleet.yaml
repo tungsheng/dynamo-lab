@@ -1,0 +1,34 @@
+# podmonitor-fleet.yaml
+# PodMonitor for the Dynamo fleet component metrics.
+#
+# The Dynamo operator does NOT ship a PodMonitor for the mocker fleet (fleet/README.md
+# flags this as unverified), so this lab provides one: Prometheus scrapes each fleet
+# component pod's DYN_SYSTEM_PORT metrics endpoint (dynamo_component_* series).
+#
+# Discovered cluster-wide because kube-prometheus-stack is installed with
+# podMonitorSelectorNilUsesHelmValues=false + empty namespace selectors (see
+# values-kube-prometheus-stack.yaml). Applied by scripts (platform.sh install_observability).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: dynamo-fleet
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+spec:
+  namespaceSelector:
+    matchNames:
+      - dynamo
+  selector:
+    matchExpressions:
+      # VERIFY: operator component-type label contract — the key the operator stamps on
+      # fleet component pods (frontend/worker/planner). Must match fleet/*.yaml + chaos/.
+      - key: nvidia.com/dynamo-component-type
+        operator: Exists
+  podMetricsEndpoints:
+    # VERIFY: DYN_SYSTEM_PORT=8081, exposed as the named `metrics` port on the worker pods
+    # (fleet/*.yaml). The spec pins 8081; the operator sometimes defaults it to 9090 —
+    # confirm the named port + value against the running pods.
+    - port: metrics
+      path: /metrics
+      interval: 15s

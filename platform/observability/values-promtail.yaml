@@ -39,6 +39,18 @@ config:
     extraRelabelConfigs:
       - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_part_of]
         target_label: app_kubernetes_io_part_of
+      # Emit a `service_name` Loki label so Tempo's tracesToLogsV2 mapping
+      # (span service.name -> Loki `service_name`, see values-kube-prometheus-stack.yaml)
+      # actually matches. Prefer app.kubernetes.io/name, fall back to the dynamo
+      # component-type label when the first is absent.
+      # VERIFY: this value MUST equal the span's service.name (OTEL_SERVICE_NAME on the
+      # fleet services, e.g. dynamo-frontend) for trace->logs jumps to resolve.
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        target_label: service_name
+      - source_labels: [service_name, __meta_kubernetes_pod_label_nvidia_com_dynamo_component_type]
+        regex: ';(.+)'        # only when service_name is still empty
+        target_label: service_name
+        replacement: '$1'
 
 # Runs as a DaemonSet on every node (system + Karpenter workers).
 daemonset:

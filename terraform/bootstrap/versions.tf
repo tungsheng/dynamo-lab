@@ -5,7 +5,7 @@
 # solving the chicken-and-egg problem: main's backend bucket must exist before `init`.
 
 terraform {
-  required_version = ">= 1.9.0" # native S3 state locking (use_lockfile) needs >= 1.9
+  required_version = ">= 1.5.0" # bootstrap keeps LOCAL state (no use_lockfile); any modern Terraform is fine
 
   required_providers {
     aws = {

@@ -12,7 +12,7 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-require_cmd kubectl
+require_cmd kubectl envsubst
 
 ACTION="${1:-start}"
 PROFILE="${2:-${PROFILE:-spike}}"
@@ -31,7 +31,11 @@ case "$TOPOLOGY" in
 esac
 
 JOB_MANIFEST="${LOAD_DIR}/k6-job.yaml"
-export PROFILE TOPOLOGY FRONTEND_URL CLUSTER_NAME REGION
+# Distinct render tokens for envsubst so they don't collide with the k6 script's
+# own ${PROFILE}/${FRONTEND_URL} JS template literals (see RENDER_VARS in common.sh).
+K6_PROFILE="$PROFILE"
+K6_FRONTEND_URL="$FRONTEND_URL"
+export PROFILE TOPOLOGY FRONTEND_URL K6_PROFILE K6_FRONTEND_URL CLUSTER_NAME REGION
 
 case "$ACTION" in
   start)

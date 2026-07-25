@@ -6,6 +6,8 @@
 #   CLUSTER_NAME    EKS cluster name        (default dynamo-lab)
 #   PROFILE         fleet: agg|disagg       (default agg for fleet-up)
 #                   load: baseline|ramp|spike|sustained|soak (default spike)
+#   TOPOLOGY        load target fleet: agg|disagg (default agg) — must match the
+#                   deployed fleet; load-start does NOT auto-detect it
 #   DYNAMO_VERSION  pinned Dynamo release
 
 SHELL := /usr/bin/env bash
@@ -73,7 +75,7 @@ chaos-stop: ## Stop the chaos monkey
 	@$(S)/chaos.sh stop
 
 # --- Load -----------------------------------------------------------------
-load-start: ## Run a k6 load profile (PROFILE=baseline|ramp|spike|sustained|soak, default spike)
+load-start: ## Run k6 (PROFILE=baseline|ramp|spike|sustained|soak default spike; TOPOLOGY=agg|disagg default agg — set to match deployed fleet)
 	@$(S)/load.sh start "$(or $(PROFILE),spike)"
 
 load-stop: ## Stop the k6 load job

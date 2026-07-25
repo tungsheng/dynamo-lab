@@ -26,7 +26,7 @@ log "user: ${GF_USER:-admin}"
 if [[ -n "$GF_PASS" ]]; then
   log "pass: ${GF_PASS}"
 else
-  log "pass: (kube-prometheus-stack default is 'prom-operator')"
+  log "pass: (this lab overrides adminPassword to 'dynamo-lab')"
 fi
 log "port-forwarding kube-prometheus-stack-grafana — press Ctrl-C to stop"
 

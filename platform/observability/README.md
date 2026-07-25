@@ -35,7 +35,7 @@ dashboards and datasources live.
 ## How the pieces connect
 
 ```
-   k6 (ns load) ──remote-write──▶ Prometheus ◀──scrape── Dynamo PodMonitors (ns dynamo)
+   k6 (ns load) ──remote-write──▶ Prometheus ◀──scrape── Dynamo fleet PodMonitor* (ns dynamo)
                                      ▲  ▲                 etcd / nats / chaos-mesh / karpenter
    fleet ──OTLP:4317──▶ Tempo ──span-metrics remote-write┘  │
    pods  ──stdout──▶ Promtail ──▶ Loki                       │
@@ -78,6 +78,10 @@ error rate, planner replica moves, and latency recovery on a single screen.
   the comment at the top of `values-promtail.yaml`.
 - **Single-binary Loki/Tempo, no object store, short retention** (7d logs/metrics,
   48h traces). Fine for a lab; not a production topology.
+- **Fleet PodMonitor** (`*` above). The Dynamo operator is not confirmed to ship a
+  PodMonitor for the mocker fleet (fleet/README.md flags this unverified), so this lab
+  provides `podmonitor-fleet.yaml`. Its selector label + metrics port carry `# VERIFY`
+  markers — confirm them against the running fleet pods.
 - **`# VERIFY` markers** in each file flag version-sensitive assumptions (chart
   versions, the `prometheus` datasource uid, k6/Karpenter/kube-state metric names).
   Resolve them against the pinned chart/tool versions at build time.

@@ -30,7 +30,11 @@ module "vpc" {
 
   azs             = local.azs
   private_subnets = [for k, v in local.azs : cidrsubnet(var.vpc_cidr, 4, k)]
-  public_subnets  = [for k, v in local.azs : cidrsubnet(var.vpc_cidr, 8, k + 48)]
+  # Public /24s sit at netnum 200+ so they never overlap the private /20 space. With
+  # az_count=4 the private /20s occupy /20 netnums 0-3 (10.0.0.0-10.0.63.255); a /24 at
+  # netnum 48 (the old offset) would fall inside the 4th private /20. Offset 200 keeps the
+  # public block disjoint from any private /20.
+  public_subnets = [for k, v in local.azs : cidrsubnet(var.vpc_cidr, 8, k + 200)]
 
   enable_nat_gateway   = true
   single_nat_gateway   = true # one NAT for the whole lab — cheaper, adequate for non-prod

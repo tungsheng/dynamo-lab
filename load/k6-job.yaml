@@ -245,18 +245,18 @@ spec:
             - experimental-prometheus-rw
             - /work/k6/script.js
           env:
-            # ---- what to run (scripts' render injects ${PROFILE} via envsubst) ----
+            # ---- what to run (scripts' render injects ${K6_PROFILE} via envsubst) ----
             - name: PROFILE
-              value: "${PROFILE}"      # baseline | ramp | spike | sustained | soak
+              value: "${K6_PROFILE}"   # baseline | ramp | spike | sustained | soak
             # ---- where to send traffic ----
-            # scripts' render injects ${FRONTEND_URL}, computed from the TOPOLOGY
+            # scripts' render injects ${K6_FRONTEND_URL}, computed from the TOPOLOGY
             # selector as http://mocker-<topology>-frontend.dynamo.svc.cluster.local:8000.
             # PROFILE (traffic shape) is INDEPENDENT of TOPOLOGY (fleet shape).
             # VERIFY: operator names the frontend Service <dgd-name>-frontend
             #   (our DGDs mocker-agg / mocker-disagg -> mocker-agg-frontend /
             #    mocker-disagg-frontend in ns dynamo on :8000).
             - name: FRONTEND_URL
-              value: "${FRONTEND_URL}"
+              value: "${K6_FRONTEND_URL}"
             - name: MODEL
               value: "Qwen/Qwen3-0.6B"
             # ---- where results go (Prometheus remote-write receiver) ----
@@ -270,7 +270,8 @@ spec:
             # dashboard reads classic series (k6_http_req_duration_p95, etc.).
             - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
               value: "false"
-            # Tag every k6 series so multiple runs are distinguishable in Prom.
+            # Emit Prometheus stale markers when the run ends so series go stale (break)
+            # instead of flatlining at their last value between runs.
             - name: K6_PROMETHEUS_RW_STALE_MARKERS
               value: "true"
           resources:
