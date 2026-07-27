@@ -6,8 +6,8 @@
 # Chart: chaos-mesh/chaos-mesh  (helm repo add chaos-mesh https://charts.chaos-mesh.org)
 # Namespace: chaos-mesh
 #
-# VERIFY: value keys below against the pinned chart version (chaos-mesh values have been
-#         stable but `dashboard.securityMode` / metrics keys occasionally shift).
+# Render-verified against the pinned chaos-mesh 2.8.3 on K8s 1.36 (2026-07-27). (Values have
+#         been stable, but `dashboard.securityMode` / metrics keys occasionally shift across majors.)
 
 # Container runtime socket for pod-kill/host faults. EKS on AL2023 uses containerd.
 chaosDaemon:

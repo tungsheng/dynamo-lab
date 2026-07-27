@@ -6,20 +6,21 @@
 # Namespace: dynamo
 # In-cluster DNS the fleet uses: http://etcd.dynamo.svc.cluster.local:2379
 #
-# NOTE ON IMAGES (VERIFY): as of 2025-08-28 Bitnami moved un-hardened/older image tags out of
+# NOTE ON IMAGES: as of 2025-08-28 Bitnami moved un-hardened/older image tags out of
 # docker.io/bitnami into docker.io/bitnamilegacy (the "Bitnami Secure Images" transition).
 # Recent chart versions default to an image tag that may no longer be pullable anonymously
-# from docker.io/bitnami. We therefore pin the legacy image explicitly and allow it. If you
-# pin a newer chart, re-check that this repository/tag exists and is anonymously pullable.
+# from docker.io/bitnami, so we pin the legacy image explicitly and allow it. This is why the
+# chart is HELD at 10.7.1 in platform.sh — a newer chart pins an etcd tag that is not in the
+# (frozen) bitnamilegacy archive. If you bump the chart, re-check the repo/tag is pullable.
 image:
   registry: docker.io
-  repository: bitnamilegacy/etcd   # VERIFY: legacy repo path + that the tag below is present
-  tag: 3.5.21-debian-12-r5         # VERIFY: pin a tag that actually exists in bitnamilegacy/etcd
+  repository: bitnamilegacy/etcd   # verified 2026-07-27: legacy repo path
+  tag: 3.5.21-debian-12-r5         # verified 2026-07-27: present + anonymously pullable on Docker Hub
 global:
   security:
     # Required when using bitnamilegacy/ images with a recent chart, which otherwise refuses
     # "non-standard" images. Safe for a throwaway lab.
-    allowInsecureImages: true      # VERIFY: key still exists on the pinned chart
+    allowInsecureImages: true      # render-verified on chart 10.7.1 (key still honored)
 
 # 3-node quorum -> lets chaos show graded degradation (lose 1 = survive, lose 2 = lose quorum).
 replicaCount: 3
@@ -43,7 +44,7 @@ metrics:
   podMonitor:
     enabled: true
     namespace: dynamo
-    # VERIFY: bitnami/etcd exposes metrics via PodMonitor (not ServiceMonitor) on recent charts.
+    # render-verified 2026-07-27: chart 10.7.1 emits a PodMonitor (not a ServiceMonitor) here.
 
 # Small persistent volumes — this is discovery state, not bulk data.
 persistence:

@@ -6,9 +6,9 @@
 # Service DNS consumed by Grafana + promtail:
 #   http://loki.monitoring.svc.cluster.local:3100
 #
-# VERIFY: pin chart version at install (grafana/loki 6.x). The `deploymentMode:
-#         SingleBinary` + `loki.storage.type: filesystem` keys below are the 6.x
-#         single-binary contract; confirm against the pinned chart.
+# Chart pinned in platform.sh (grafana/loki 7.1.0). The `deploymentMode: SingleBinary` +
+# `loki.storage.type: filesystem` keys below are render-verified against 7.1.0 on K8s 1.36
+# (2026-07-27) — they carried over unchanged from the 6.x single-binary contract.
 
 deploymentMode: SingleBinary
 
