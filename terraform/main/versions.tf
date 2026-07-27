@@ -17,7 +17,7 @@ terraform {
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.32" # VERIFY: latest hashicorp/kubernetes 2.x
+      version = "~> 3.2" # VERIFY: latest hashicorp/kubernetes 2.x
     }
   }
 }
