@@ -1,0 +1,60 @@
+name: CI
+
+# Static checks only — this lab never touches AWS in CI. It lints the shell glue,
+# the Kubernetes/Helm YAML, and the Terraform, so a broken manifest or script is
+# caught before anyone runs `make up` against a real account.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint scripts
+        # shellcheck ships preinstalled on ubuntu-latest. `warning` severity keeps
+        # the SC1091 "can't follow sourced file" info notes from failing the build.
+        run: shellcheck --severity=warning scripts/*.sh scripts/lib/*.sh
+
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: pipx install yamllint
+      - name: Lint manifests and values
+        run: yamllint -c .yamllint.yml .
+
+  terraform:
+    name: terraform (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - terraform/bootstrap
+          - terraform/main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.6"
+      - name: fmt
+        run: terraform -chdir=${{ matrix.module }} fmt -check -recursive
+      - name: init (no backend)
+        run: terraform -chdir=${{ matrix.module }} init -backend=false -input=false
+      - name: validate
+        run: terraform -chdir=${{ matrix.module }} validate -no-color

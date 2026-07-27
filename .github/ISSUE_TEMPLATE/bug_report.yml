@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in the lab doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This lab has never been applied to a real AWS account, so "it doesn't
+        apply cleanly" reports are expected and useful. Please be specific.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran and what went wrong.
+      placeholder: |
+        $ make fleet-up PROFILE=disagg
+        ... error output ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Terraform / infra (make up, infra-up)
+        - Platform (etcd, NATS, operator, observability, chaos-mesh, karpenter)
+        - Fleet (agg / disagg DynamoGraphDeployment)
+        - Chaos experiments / annotation bridge
+        - Load (k6 profiles)
+        - Scripts / Makefile
+        - Docs
+    validations:
+      required: true
+  - type: input
+    id: dynamo-version
+    attributes:
+      label: Dynamo version pinned
+      description: The DYNAMO_VERSION / chart versions you used, if relevant.
+      placeholder: "1.3.0"
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, and versions of terraform / kubectl / helm / aws.
+      placeholder: |
+        macOS 15.5, terraform 1.14.6, kubectl 1.31, helm 3.16, aws-cli 2.x

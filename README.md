@@ -1,5 +1,8 @@
 # Dynamo Lab
 
+[![CI](https://github.com/tungsheng/dynamo-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/tungsheng/dynamo-lab/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 A **GPU-free** experimentation lab for [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo),
 deployed to Amazon EKS, built to *watch* an inference **fleet**:
 
@@ -101,3 +104,14 @@ mocker image tag are pinned and marked with `# VERIFY:` comments:
 2. **Planner ↔ mocker ↔ k8s autoscaling** — confirm the planner's `KubernetesConnector`
    scales mocker worker replicas from load metrics; `VirtualConnector` is the documented
    fallback.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). CI runs three static linters (shellcheck,
+yamllint, `terraform fmt`/`validate`) — no AWS calls — so you can reproduce it locally.
+The most useful contribution today is resolving a `# VERIFY:` marker against a pinned
+Dynamo release (`grep -rn VERIFY .`).
+
+## License
+
+[Apache License 2.0](LICENSE) — matching NVIDIA Dynamo upstream.

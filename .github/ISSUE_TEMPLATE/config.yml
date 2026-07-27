@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Project vocabulary (CONTEXT.md)
+    url: https://github.com/tungsheng/dynamo-lab/blob/main/CONTEXT.md
+    about: The exact terms this project uses — read before filing.
+  - name: Design decisions (ADRs)
+    url: https://github.com/tungsheng/dynamo-lab/tree/main/docs/adr
+    about: Why each architectural choice was made.
+  - name: NVIDIA Dynamo upstream
+    url: https://github.com/ai-dynamo/dynamo
+    about: Questions about Dynamo itself (CRD schema, mocker, planner) belong upstream.

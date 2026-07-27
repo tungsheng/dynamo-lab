@@ -1,0 +1,29 @@
+# yamllint config tuned for Helm values + Kubernetes manifests.
+# These files legitimately carry long lines, envsubst ${VAR} tokens, and
+# start without an explicit `---`, so the noisy stylistic rules are relaxed;
+# the rules that catch real breakage (syntax, duplicate keys, tabs) stay on.
+extends: default
+
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+
+rules:
+  line-length: disable
+  document-start: disable
+  comments:
+    require-starting-space: true
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  truthy:
+    # Helm charts use yes/no/on/off as values; only flag mistyped keys elsewhere.
+    check-keys: false
+  braces: disable
+  brackets: disable
+  # Some values files hand-align `key:   value` columns for readability.
+  colons: disable
+  empty-lines:
+    max: 2

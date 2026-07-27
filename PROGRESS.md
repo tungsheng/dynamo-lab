@@ -1,6 +1,6 @@
 # Progress
 
-_Last updated: 2026-07-25_
+_Last updated: 2026-07-27_
 
 Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 [CONTEXT.md](CONTEXT.md) for vocabulary, and [docs/adr/](docs/adr/) for the design decisions.
@@ -13,6 +13,9 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 - [x] **Cleanup/audit pass 2** (5 lenses) — 25 confirmed fixed, 2 rejected.
 - [x] **Improvement/audit pass 3** (deploy-readiness · security · feasibility · DX) —
   15 confirmed fixed (2 blockers), 12 rejected.
+- [x] **GitHub-ready** — Apache-2.0 LICENSE, CI (shellcheck · yamllint · `terraform
+  fmt`/`validate`), issue/PR templates, CODEOWNERS, Dependabot, committed provider
+  lock files. All three linters verified green locally. Published as a public repo.
 - [ ] **First `make up` against AWS** — NOT yet run. Nothing has been applied to a real account.
 - [ ] **Resolve remaining `# VERIFY` markers** against a pinned Dynamo release (see below).
 - [ ] **First end-to-end experiment** — spike + chaos on the disaggregated fleet.
@@ -22,6 +25,18 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 A declarative, GPU-free Dynamo fleet on EKS with full observability, Chaos Mesh fault
 injection, and k6 spike load — driven by `make up/down/pause/resume`, `fleet-up`,
 `chaos-start/stop`, `load-start/stop`. Architecture and layout are in the README.
+
+## Repository & CI
+
+Static-only CI (`.github/workflows/ci.yml`) — **no AWS calls** — runs on every push/PR:
+
+- **shellcheck** (`--severity=warning`) on `scripts/*.sh` + `scripts/lib/*.sh`.
+- **yamllint** (`.yamllint.yml`, tuned for Helm values / k8s manifests) on all YAML.
+- **terraform** `fmt -check` + `init -backend=false` + `validate` on both roots.
+
+All three pass locally. `common.sh` carries a scoped `# shellcheck disable=SC2034`
+(its config vars are consumed by the scripts that source it). Provider lock files for
+`terraform/bootstrap` and `terraform/main` are committed (linux_amd64 + darwin_arm64).
 
 ## Audit history
 

@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # config vars below are the source of truth, consumed by the scripts that source this file
 # scripts/lib/common.sh
 # Shared environment + helpers for every dynamo-lab script.
 # SOURCE this file ("source .../lib/common.sh"); do not execute it directly.

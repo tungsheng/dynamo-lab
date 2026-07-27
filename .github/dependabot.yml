@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned versions fresh.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Terraform providers/modules for both roots.
+  - package-ecosystem: terraform
+    directory: /terraform/bootstrap
+    schedule:
+      interval: weekly
+  - package-ecosystem: terraform
+    directory: /terraform/main
+    schedule:
+      interval: weekly

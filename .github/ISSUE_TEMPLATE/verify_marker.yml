@@ -1,0 +1,39 @@
+name: Resolve a "# VERIFY:" marker
+description: Confirm (or correct) one best-effort assumption against a real Dynamo release.
+labels: ["verify", "upstream"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The lab is tagged with `# VERIFY:` comments wherever an upstream Dynamo
+        detail is assumed but not yet checked against a live release. Run
+        `grep -rn VERIFY .` to see them all. Use this to track resolving one.
+  - type: input
+    id: location
+    attributes:
+      label: Marker location
+      description: File and line of the `# VERIFY:` comment.
+      placeholder: "scripts/lib/common.sh:51"
+    validations:
+      required: true
+  - type: textarea
+    id: assumption
+    attributes:
+      label: The assumption
+      description: Quote the `# VERIFY:` comment and what the code currently assumes.
+    validations:
+      required: true
+  - type: input
+    id: release
+    attributes:
+      label: Dynamo release checked against
+      placeholder: "ai-dynamo/dynamo v1.3.0"
+    validations:
+      required: true
+  - type: textarea
+    id: finding
+    attributes:
+      label: Finding
+      description: Is the assumption correct? If not, what is the right value/path/name?
+    validations:
+      required: true
