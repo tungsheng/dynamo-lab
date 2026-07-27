@@ -8,7 +8,7 @@
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.31" # VERIFY: latest terraform-aws-modules/eks/aws 20.x
+  version = "~> 21.24" # VERIFY: latest terraform-aws-modules/eks/aws 20.x
 
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version

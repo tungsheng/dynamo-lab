@@ -12,7 +12,7 @@
 
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "~> 20.31" # VERIFY: must match the eks module major/minor line
+  version = "~> 21.24" # VERIFY: must match the eks module major/minor line
 
   cluster_name = module.eks.cluster_name
 
