@@ -13,8 +13,8 @@
 #    for traces<->logs<->metrics correlation.
 #  * Modest, lab-sized retention so idle cost stays low.
 #
-# VERIFY: pin chart version at install time, e.g. --version 65.x
-#         (prometheus-community/kube-prometheus-stack). Values keys below are stable
+# Chart pinned in platform.sh (prometheus-community/kube-prometheus-stack 87.20.0;
+#         render-verified on K8s 1.36, 2026-07-27). Values keys below are stable
 #         across the 60.x–6x.x line but confirm against the pinned chart.
 
 fullnameOverride: kube-prometheus-stack

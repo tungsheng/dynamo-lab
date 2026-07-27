@@ -6,9 +6,9 @@
 # Namespace: dynamo
 # In-cluster DNS the fleet uses: nats://nats.dynamo.svc.cluster.local:4222
 #
-# VERIFY: value key layout below matches the pinned nats chart. The modern nats chart (>=1.x)
-#         uses `config.{jetstream,cluster}` and `promExporter`; older 0.x charts used
-#         `nats.jetstream`, `cluster.enabled`, and `exporter`. Confirm before applying.
+# Render-verified against the pinned nats/nats 2.14.2 on K8s 1.36 (2026-07-27): the
+# `config.{jetstream,cluster}` + `promExporter` layout below produces a 3-node JetStream
+# cluster with the exporter. (Older 0.x charts used `nats.jetstream`/`cluster.enabled`/`exporter`.)
 
 config:
   # 3-node clustered NATS so chaos can partition/degrade the event plane gradually.

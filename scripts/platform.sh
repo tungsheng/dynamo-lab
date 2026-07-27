@@ -30,8 +30,14 @@ REPO_CHAOS="https://charts.chaos-mesh.org"
 
 # Coordination plane.
 ETCD_CHART="oci://registry-1.docker.io/bitnamicharts/etcd"
-ETCD_CHART_VERSION="${ETCD_CHART_VERSION:-10.7.1}"     # VERIFY: bitnami etcd chart version
-NATS_CHART_VERSION="${NATS_CHART_VERSION:-1.2.11}"     # VERIFY: nats/nats chart version
+# HELD at 10.7.1 (not bumped to the current 12.x): newer charts pin an etcd image tag that is
+# absent from the FROZEN docker.io/bitnamilegacy archive, so a bump breaks the anonymous-pull
+# fallback below. Renders clean on K8s 1.36 and the pinned legacy image is verified present
+# (see install_coordination). Verified 2026-07-27.
+ETCD_CHART_VERSION="${ETCD_CHART_VERSION:-10.7.1}"
+# nats/nats 2.14.2 — latest; the config.*/promExporter value schema is unchanged from 1.x
+# (render-verified against K8s 1.36 with the flags/values below). Verified 2026-07-27.
+NATS_CHART_VERSION="${NATS_CHART_VERSION:-2.14.2}"
 
 # Dynamo operator (+ CRDs, which ship inside the operator image).
 # Verified v1.3.0: NGC serves the chart over HTTPS (`helm repo add`), NOT oci:// — see
@@ -43,13 +49,16 @@ REPO_DYNAMO="${REPO_DYNAMO:-https://helm.ngc.nvidia.com/nvidia/ai-dynamo}"
 DYNAMO_OPERATOR_CHART="${DYNAMO_OPERATOR_CHART:-nvidia-ai-dynamo/dynamo-platform}"
 
 # Observability.
-KPS_VERSION="${KPS_VERSION:-66.3.1}"          # VERIFY: kube-prometheus-stack chart version
-LOKI_VERSION="${LOKI_VERSION:-6.24.0}"        # VERIFY: grafana/loki chart version
-TEMPO_VERSION="${TEMPO_VERSION:-1.14.0}"      # VERIFY: grafana/tempo chart version
-PROMTAIL_VERSION="${PROMTAIL_VERSION:-6.16.6}" # VERIFY: grafana/promtail chart version
+# All four bumped to latest and render-verified against K8s 1.36 with the values/flags below;
+# the old pins predated 1.36 (e.g. the kube-prometheus-stack 66.x Prometheus operator). The
+# NATS/Loki/KPS jumps cross a chart major but the values keys we set still resolve. 2026-07-27.
+KPS_VERSION="${KPS_VERSION:-87.20.0}"          # kube-prometheus-stack (was 66.3.1)
+LOKI_VERSION="${LOKI_VERSION:-7.1.0}"          # grafana/loki (was 6.24.0, chart major 6->7)
+TEMPO_VERSION="${TEMPO_VERSION:-1.24.4}"       # grafana/tempo (was 1.14.0)
+PROMTAIL_VERSION="${PROMTAIL_VERSION:-6.17.1}" # grafana/promtail (was 6.16.6; promtail is EOL, Alloy is the successor)
 
 # Chaos Mesh.
-CHAOS_VERSION="${CHAOS_VERSION:-2.6.5}"       # VERIFY: chaos-mesh chart version
+CHAOS_VERSION="${CHAOS_VERSION:-2.8.3}"       # chaos-mesh (was 2.6.5); latest, render-verified on K8s 1.36. 2026-07-27
 
 # NOTE: the Karpenter controller chart version is NOT pinned here — Terraform owns the
 # controller helm_release (terraform/main/karpenter.tf, chart 1.0.8). This script only
@@ -94,8 +103,10 @@ install_coordination() {
   step "Coordination plane: etcd (HA, auth disabled) + NATS (JetStream cluster)"
 
   # etcd: 3-node quorum, no auth (ALLOW_NONE_AUTHENTICATION), metrics on.
-  # VERIFY: bitnami relocated images to 'bitnamilegacy'; overriding the repo
-  # requires global.security.allowInsecureImages=true. Confirm a working tag.
+  # Bitnami relocated free image tags to docker.io/bitnamilegacy (Aug 2025), so we override the
+  # repo and set global.security.allowInsecureImages=true. The pinned tag
+  # bitnamilegacy/etcd:3.5.21-debian-12-r5 (values-etcd.yaml) is verified present + anonymously
+  # pullable (Docker Hub, 2026-07-27).
   # shellcheck disable=SC2046
   helm upgrade --install "$REL_ETCD" "$ETCD_CHART" \
     --version "$ETCD_CHART_VERSION" -n "$NS_DYNAMO" \
