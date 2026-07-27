@@ -19,8 +19,12 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 - [x] **Fleet + operator verified against Dynamo v1.3.0** — resolved 46 `# VERIFY:` markers in
   the fleet manifests, operator install, and metrics wiring against upstream primary sources;
   fixed 6 real defects (Pass 4 below). Docs/source-verified, not yet live-verified.
+- [x] **Terraform plan validated (read-only)** — both roots plan clean against the real account
+  (209468748526, us-west-2): bootstrap 5 to add, main **91 to add / 0 change / 0 destroy**, no
+  warnings. Nothing applied. Infra version markers resolved in the same pass (Pass 5 below).
 - [ ] **First `make up` against AWS** — NOT yet run. Nothing has been applied to a real account.
-- [ ] **Resolve remaining `# VERIFY` markers** (80 left: observability / coordination / chaos / infra).
+- [ ] **Resolve remaining `# VERIFY` markers** (66 left: platform / observability / coordination /
+  chaos / load / scripts). The **Terraform/infra layer is now fully resolved.**
 - [ ] **First end-to-end experiment** — spike + chaos on the disaggregated fleet.
 
 ## What's built
@@ -50,9 +54,11 @@ v6/v21 migration has since been done by hand: `terraform/main` now runs on `aws`
 `cluster_addons`→`addons`; the iam submodule dropped its `-eks` suffix and `role_name`→`name`
 (with `use_name_prefix=false` to keep the fixed name); karpenter dropped `enable_pod_identity`
 and `enable_v1_permissions` (both now default behavior). `terraform validate` + `fmt` pass and
-the provider lock is regenerated. **Not yet AWS-applied** — a `terraform plan` against a real
-account is the remaining check (watch the OIDC-provider-host and addon-default changes noted in
-the v21 upgrade guide, which only matter for an already-deployed cluster).
+the provider lock is regenerated. **`terraform plan` has now been run** (read-only, via a temporary
+local-backend override so no state bucket was created) — both roots plan clean, so the migration is
+structurally valid; still not AWS-*applied*. The OIDC-provider-host and addon-default changes noted
+in the v21 upgrade guide only matter for an already-deployed cluster, so they don't affect this
+first apply.
 
 ## Audit history
 
@@ -110,6 +116,22 @@ markers and fixed 6 defects:
   inline `extraPodSpec` PodSpec, cpu/memory resources), mocker CLI flags, env var names, and the
   `<dgd>-frontend` Service name.
 
+**Pass 5 — infra version hardening + first read-only plan** (against the real account, no apply).
+Verified the pinned infra versions against primary sources (AWS EKS version calendar, Karpenter
+release/compat docs) and bumped the aged ones, then confirmed both Terraform roots plan clean:
+
+- **EKS `1.31` → `1.36`** — 1.31 had rolled into paid extended support (standard ended 2025-11-26);
+  1.36 is the latest with standard support through 2027-08-02. Structurally identical plan.
+- **Karpenter chart `1.0.8` → `1.14.0`** — latest stable; the compat matrix requires ≥1.13 for K8s
+  1.36. Plan shows `chart=karpenter version=1.14.0`.
+- **AL2023 AMI alias confirmed** — the node group's SSM lookup resolves
+  `AL2023_x86_64_STANDARD` → `1.36.2-20260724` in-plan.
+- **dev.tfvars + endpoint lockdown** — public API `public_access_cidrs` pinned to the egress `/32`.
+- **example.tfvars packaging fix** — un-ignored so the README's copy step works on a fresh clone.
+
+The plan was run with a temporary local-backend override (deleted after) so no S3 state bucket was
+created — a true read-only validation. `terraform fmt`/`validate` still pass.
+
 ## Outstanding — before the first `make up`
 
 Never applied to AWS. The fleet manifests + Dynamo operator install are now verified against
@@ -120,12 +142,19 @@ v1.3.0 (Pass 4); the remaining `grep -rn VERIFY .` markers (80) live in the othe
 2. **Live-only fleet checks** — the component-type pod labels the operator actually stamps (the
    disagg chaos selectors assume the alpha-era `worker` + `sub-component-type` pairing), and the
    `metricsService`/PodMonitor scrape once a cluster exists.
-3. **Infra versions still to confirm**: the EKS control-plane version (`1.31`; 1.32/1.33 may be
-   GA), the Karpenter **helm chart** `1.0.8` (distinct from the `eks//modules/karpenter` v21
-   submodule), the AL2023 AMI alias, and the bitnami/etcd tag. The `terraform-aws-modules` and
-   providers are now on the current v6/v21 line (see Repository & CI).
-4. **Security**: set `cluster_endpoint_public_access_cidrs` in `terraform/main/dev.tfvars`
-   (now honored) to your egress CIDR.
+3. **Infra versions — RESOLVED (Pass 5).** EKS control-plane `1.31` → **`1.36`** (1.31 had aged
+   into paid *extended* support; 1.36 is the latest with standard support to 2027-08-02). Karpenter
+   helm chart `1.0.8` → **`1.14.0`** (latest; supports K8s 1.36, needs ≥1.13). AL2023 AMI alias
+   `AL2023_x86_64_STANDARD` confirmed correct (plan resolves it to `1.36.2-20260724`). The stale
+   `aws 5.x` comment in `terraform/bootstrap/versions.tf` corrected (it is on 6.x). Only the
+   **bitnami/etcd tag** remains — that is a *platform*-layer marker, not Terraform.
+4. **Security — DONE.** `terraform/main/dev.tfvars` created (gitignored) locking
+   `cluster_endpoint_public_access_cidrs` to the operator's egress `/32`; the plan confirms the
+   cluster's `public_access_cidrs` is the single `/32` (all other `0.0.0.0/0` are node egress /
+   NACL / NAT default routes). Refresh the CIDR if your egress IP changes.
+   Also fixed a packaging bug: `example.tfvars` was matched by the `*.tfvars` gitignore rule and
+   so never committed (a fresh clone lacked the template the README says to copy) — added an
+   `!example.tfvars` exception.
 5. **Prereqs on your machine**: `terraform >= 1.10`, `envsubst` (gettext), `aws`/`kubectl`/`helm`.
    The system node group is **3× m7i.large** (etcd HA).
 

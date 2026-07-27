@@ -7,6 +7,10 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+# Committed template the README tells you to copy to dev.tfvars. Without this
+# exception `*.tfvars` above would ignore it, so it never lands in a fresh clone.
+!example.tfvars
+!**/example.tfvars
 override.tf
 override.tf.json
 *_override.tf

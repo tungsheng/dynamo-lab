@@ -21,7 +21,7 @@ variable "cluster_name" {
 variable "cluster_version" {
   description = "Kubernetes control-plane version."
   type        = string
-  default     = "1.31" # VERIFY: latest stable EKS version at build time (1.32/1.33 may be GA)
+  default     = "1.36" # latest EKS standard-support version (verified 2026-07-27; std support -> 2027-08-02). 1.31 is now in extended (paid) support.
 }
 
 variable "vpc_cidr" {
@@ -69,7 +69,7 @@ variable "cluster_endpoint_public_access" {
 variable "cluster_endpoint_public_access_cidrs" {
   description = "CIDRs allowed to reach the public EKS API endpoint. Narrow this in a shared account."
   type        = list(string)
-  default     = ["0.0.0.0/0"] # VERIFY: tighten to your egress IP/CIDR for anything but a throwaway lab
+  default     = ["0.0.0.0/0"] # portable default; tighten to your egress /32 in terraform/main/dev.tfvars (see example.tfvars)
 }
 
 variable "tags" {

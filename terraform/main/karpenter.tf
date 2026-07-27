@@ -38,7 +38,7 @@ resource "helm_release" "karpenter" {
   name       = "karpenter"
   repository = "oci://public.ecr.aws/karpenter"
   chart      = "karpenter"
-  version    = "1.0.8" # VERIFY: latest Karpenter 1.x chart compatible with cluster_version
+  version    = "1.14.0" # Karpenter 1.14 (latest; supports K8s 1.36, needs >= 1.13). Verified 2026-07-27.
 
   # Don't block on full rollout; the NodePool/EC2NodeClass are applied later by scripts.
   wait = false

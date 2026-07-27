@@ -52,7 +52,7 @@ module "eks" {
       instance_types = [var.system_node_instance_type]
       capacity_type  = "ON_DEMAND"
 
-      ami_type = "AL2023_x86_64_STANDARD" # VERIFY: AL2023 standard x86_64 EKS-optimized AMI
+      ami_type = "AL2023_x86_64_STANDARD" # AL2023 standard x86_64 EKS-optimized AMI (confirmed correct ami_type, 2026-07-27)
 
       # Encrypt the root EBS volume explicitly (the gp3 StorageClass from I5 covers PVC
       # encryption; this covers the node's own disk).
