@@ -22,7 +22,7 @@ jobs:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Lint scripts
         # shellcheck ships preinstalled on ubuntu-latest. `warning` severity keeps
         # the SC1091 "can't follow sourced file" info notes from failing the build.
@@ -32,7 +32,7 @@ jobs:
     name: yamllint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install yamllint
         run: pipx install yamllint
       - name: Lint manifests and values
@@ -48,8 +48,8 @@ jobs:
           - terraform/bootstrap
           - terraform/main
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.14.6"
       - name: fmt
