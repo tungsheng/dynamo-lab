@@ -12,17 +12,15 @@
 
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "~> 20.31" # VERIFY: must match the eks module major/minor line
+  version = "~> 21.24" # must match the eks module major/minor line
 
   cluster_name = module.eks.cluster_name
 
-  # Karpenter v1 IAM permission set.
-  enable_v1_permissions = true
-
   namespace = "karpenter"
 
-  # Auth via EKS Pod Identity (simpler than IRSA; needs eks-pod-identity-agent addon).
-  enable_pod_identity             = true
+  # Auth via EKS Pod Identity. v21 removed `enable_pod_identity` and `enable_v1_permissions`:
+  # Pod Identity and the Karpenter v1 controller policy are now the only (default) behavior.
+  # We still create the association explicitly (needs the eks-pod-identity-agent addon).
   create_pod_identity_association = true
 
   # Let Karpenter nodes be SSM-managed (handy for a lab) and pull ECR images.

@@ -23,7 +23,7 @@ locals {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.13" # VERIFY: latest terraform-aws-modules/vpc/aws 5.x
+  version = "~> 6.6" # v6: all inputs/outputs this lab uses are unchanged from the v5 line
 
   name = "${var.project}-vpc"
   cidr = var.vpc_cidr

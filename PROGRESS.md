@@ -41,12 +41,18 @@ All three pass locally. `common.sh` carries a scoped `# shellcheck disable=SC203
 (its config vars are consumed by the scripts that source it). Provider lock files for
 `terraform/bootstrap` and `terraform/main` are committed (linux_amd64 + darwin_arm64).
 
-Dependabot proposes minor/patch bumps for GitHub Actions + Terraform. It merged the safe
-provider bumps (actions, `hashicorp/aws` v6 in bootstrap, `hashicorp/kubernetes` v3, and
-`hashicorp/helm` v3 in main — the last needed the `kubernetes = {}` provider-config rewrite).
-**Major** upgrades of the `terraform-aws-modules` (vpc v6 / eks v21 / iam v6) require a
-coordinated `aws`-provider v6 migration with breaking API changes and are held for a
-deliberate, AWS-tested effort — Dependabot is configured to ignore Terraform majors.
+Dependabot proposes minor/patch bumps for GitHub Actions + Terraform, and is configured to
+**ignore Terraform majors** (they need deliberate migration, not auto-merge). The coordinated
+v6/v21 migration has since been done by hand: `terraform/main` now runs on `aws` provider v6,
+`terraform-aws-modules` **vpc v6 / eks v21 / iam v6** (+ eks `//modules/karpenter` v21), and
+`helm` v3 / `kubernetes` v3. All the breaking renames are resolved — eks `cluster_name`→`name`,
+`cluster_version`→`kubernetes_version`, `cluster_endpoint_public_access*`→`endpoint_public_access*`,
+`cluster_addons`→`addons`; the iam submodule dropped its `-eks` suffix and `role_name`→`name`
+(with `use_name_prefix=false` to keep the fixed name); karpenter dropped `enable_pod_identity`
+and `enable_v1_permissions` (both now default behavior). `terraform validate` + `fmt` pass and
+the provider lock is regenerated. **Not yet AWS-applied** — a `terraform plan` against a real
+account is the remaining check (watch the OIDC-provider-host and addon-default changes noted in
+the v21 upgrade guide, which only matter for an already-deployed cluster).
 
 ## Audit history
 
@@ -114,7 +120,10 @@ v1.3.0 (Pass 4); the remaining `grep -rn VERIFY .` markers (80) live in the othe
 2. **Live-only fleet checks** — the component-type pod labels the operator actually stamps (the
    disagg chaos selectors assume the alpha-era `worker` + `sub-component-type` pairing), and the
    `metricsService`/PodMonitor scrape once a cluster exists.
-3. **Infra versions**: EKS `1.31`, Karpenter chart `1.0.8`, AL2023 AMI alias, bitnami/etcd tag.
+3. **Infra versions still to confirm**: the EKS control-plane version (`1.31`; 1.32/1.33 may be
+   GA), the Karpenter **helm chart** `1.0.8` (distinct from the `eks//modules/karpenter` v21
+   submodule), the AL2023 AMI alias, and the bitnami/etcd tag. The `terraform-aws-modules` and
+   providers are now on the current v6/v21 line (see Repository & CI).
 4. **Security**: set `cluster_endpoint_public_access_cidrs` in `terraform/main/dev.tfvars`
    (now honored) to your egress CIDR.
 5. **Prereqs on your machine**: `terraform >= 1.10`, `envsubst` (gettext), `aws`/`kubectl`/`helm`.

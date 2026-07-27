@@ -8,13 +8,13 @@
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.31" # VERIFY: latest terraform-aws-modules/eks/aws 20.x
+  version = "~> 21.24" # v21 renamed the cluster_* inputs (name/kubernetes_version/endpoint_*/addons)
 
-  cluster_name    = var.cluster_name
-  cluster_version = var.cluster_version
+  name               = var.cluster_name
+  kubernetes_version = var.cluster_version
 
-  cluster_endpoint_public_access       = var.cluster_endpoint_public_access
-  cluster_endpoint_public_access_cidrs = var.cluster_endpoint_public_access_cidrs
+  endpoint_public_access       = var.cluster_endpoint_public_access
+  endpoint_public_access_cidrs = var.cluster_endpoint_public_access_cidrs
 
   # The identity running `terraform apply` gets cluster-admin, so kubectl works immediately.
   enable_cluster_creator_admin_permissions = true
@@ -26,7 +26,7 @@ module "eks" {
   # Managed addons. vpc-cni is installed before compute so pods get IPs on first boot;
   # ebs-csi uses a dedicated IRSA role (iam.tf). eks-pod-identity-agent backs Karpenter's
   # Pod Identity auth (karpenter.tf).
-  cluster_addons = {
+  addons = {
     coredns = {
       most_recent = true
     }
@@ -42,7 +42,7 @@ module "eks" {
     }
     aws-ebs-csi-driver = {
       most_recent              = true
-      service_account_role_arn = module.ebs_csi_irsa.iam_role_arn
+      service_account_role_arn = module.ebs_csi_irsa.arn
     }
   }
 

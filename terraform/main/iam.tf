@@ -7,10 +7,11 @@
 # by the EKS Karpenter submodule in karpenter.tf, not here.
 
 module "ebs_csi_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.44" # VERIFY: latest terraform-aws-modules/iam/aws 5.x
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts"
+  version = "~> 6.6" # v6 renamed this submodule (dropped `-eks`) and `role_name` -> `name`
 
-  role_name             = "${var.cluster_name}-ebs-csi-irsa"
+  name                  = "${var.cluster_name}-ebs-csi-irsa"
+  use_name_prefix       = false # v6 defaults this true; keep the fixed role name (v5 behavior)
   attach_ebs_csi_policy = true
 
   oidc_providers = {
