@@ -41,6 +41,13 @@ All three pass locally. `common.sh` carries a scoped `# shellcheck disable=SC203
 (its config vars are consumed by the scripts that source it). Provider lock files for
 `terraform/bootstrap` and `terraform/main` are committed (linux_amd64 + darwin_arm64).
 
+Dependabot proposes minor/patch bumps for GitHub Actions + Terraform. It merged the safe
+provider bumps (actions, `hashicorp/aws` v6 in bootstrap, `hashicorp/kubernetes` v3, and
+`hashicorp/helm` v3 in main — the last needed the `kubernetes = {}` provider-config rewrite).
+**Major** upgrades of the `terraform-aws-modules` (vpc v6 / eks v21 / iam v6) require a
+coordinated `aws`-provider v6 migration with breaking API changes and are held for a
+deliberate, AWS-tested effort — Dependabot is configured to ignore Terraform majors.
+
 ## Audit history
 
 **Pass 1 — consistency + correctness.** Cross-file seams from the parallel build: wrong Helm

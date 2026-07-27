@@ -13,11 +13,11 @@ terraform {
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.16" # VERIFY: pinned to 2.x so the nested `kubernetes {}` provider block works; helm 3.x changed this
+      version = "~> 3.0" # 3.x: provider config uses `kubernetes = {}` (attribute), see providers.tf
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 3.2" # VERIFY: latest hashicorp/kubernetes 2.x
+      version = "~> 3.2"
     }
   }
 }

@@ -9,12 +9,22 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Terraform providers/modules for both roots.
+  # Terraform providers/modules for both roots. Major upgrades of the AWS modules
+  # (vpc/eks/iam) and providers are breaking — module API rewrites, provider-config
+  # changes, and an aws-provider v6 cascade — and must be migrated deliberately and
+  # tested against AWS, not auto-merged onto never-deployed infra. So Dependabot only
+  # proposes minor/patch here; major bumps are handled by hand.
   - package-ecosystem: terraform
     directory: /terraform/bootstrap
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: terraform
     directory: /terraform/main
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
