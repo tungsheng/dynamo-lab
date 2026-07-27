@@ -8,7 +8,7 @@
 
 module "ebs_csi_irsa" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.44" # VERIFY: latest terraform-aws-modules/iam/aws 5.x
+  version = "~> 6.6" # VERIFY: latest terraform-aws-modules/iam/aws 5.x
 
   role_name             = "${var.cluster_name}-ebs-csi-irsa"
   attach_ebs_csi_policy = true
