@@ -39,10 +39,12 @@ Both DGDs live in namespace **`dynamo`** alongside the coordination plane (etcd 
 - **Coordination plane** — every service gets the shared-spec DNS via env:
   - `ETCD_ENDPOINTS=http://etcd.dynamo.svc.cluster.local:2379` (service discovery)
   - `NATS_SERVER=nats://nats.dynamo.svc.cluster.local:4222` (KV event plane)
-- **Metrics** — workers set `DYN_SYSTEM_PORT=8081` and expose a `metrics` container port;
-  `dynamo_component_*` metrics (incl. `dynamo_component_inflight_requests`) are served on
-  `/metrics:8081`. Frontend serves `/metrics` on `:8000`. (The `monitoring` stack's
-  PodMonitor/ServiceMonitor discovery scrapes these.)
+- **Metrics** — every service exposes a `metrics` container port on `:8081` and binds it:
+  workers and Frontend via `DYN_SYSTEM_PORT=8081`, the Planner via `PLANNER_PROMETHEUS_PORT=8081`
+  (verified v1.3.0 — the Planner serves Prometheus metrics on `PLANNER_PROMETHEUS_PORT`, default
+  9085, not `DYN_SYSTEM_PORT`; the Frontend must have `DYN_SYSTEM_PORT` set on itself, not just
+  the workers). `dynamo_component_*` metrics (incl. `dynamo_component_inflight_requests`) are
+  served there. (The `monitoring` stack's PodMonitor discovery scrapes port name `metrics`.)
 - **Tracing** — OTLP traces exported to Tempo over gRPC:
   `OTEL_EXPORT_ENABLED=true`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://tempo.monitoring.svc.cluster.local:4317`,
   `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. Logs are emitted as JSONL (`DYN_LOGGING_JSONL=true`)
@@ -56,48 +58,56 @@ Both DGDs live in namespace **`dynamo`** alongside the coordination plane (etcd 
   `"environment": "kubernetes"`, which selects the **KubernetesConnector**: the planner
   edits the DGD's service `replicas` through the Kubernetes API and the operator reconciles
   the pool. The fallback is the **VirtualConnector** (`"environment": "virtual"`) for
-  local/dry-run where no operator is present. Config uses load-scaling only
-  (`optimization_target: none`) to stay backend-agnostic for the mocker.
+  local/dry-run where no operator is present. Config uses `optimization_target: throughput`
+  (verified v1.3.0): for any non-`sla` target the planner force-enables load scaling and
+  disables throughput scaling, giving backend-agnostic, load-driven autoscaling with no
+  profiling data. (`load` would need explicit prefill/decode threshold keys, and `none` is not
+  a valid target — both raise at config validation.)
 - **HuggingFace token** — none. `Qwen/Qwen3-0.6B` is public. If HF rate-limits tokenizer
   pulls, create `hf-token-secret` (key `HF_TOKEN`) in ns `dynamo` and add
   `envFromSecret: hf-token-secret` to each worker service.
 
-## VERIFY — version-sensitive assumptions (confirm against the pinned Dynamo release)
+## Verified against ai-dynamo/dynamo v1.3.0
 
-1. **Image tag** — all containers use `nvcr.io/nvidia/ai-dynamo/dynamo-planner:my-tag`.
-   Replace `my-tag` with the pinned `${DYNAMO_VERSION}`. Confirm this image carries the
-   mocker wheel (`python3 -m dynamo.mocker`) AND runs CPU-only. (There is no dedicated
-   `mocker-runtime` image; upstream directs mocker users to the `dynamo-planner` image.)
-2. **etcd discovery-backend annotation** — `nvidia.com/dynamo-discovery-backend: etcd`.
-   Recent Dynamo defaults to Kubernetes-native discovery (EndpointSlices +
-   `DynamoWorkerMetadata` CRDs) and treats etcd as legacy. This lab pins a 3-node etcd
-   coordination plane, so we opt into etcd discovery. Verify the exact annotation
-   key/value against `docs/kubernetes/service-discovery.md`, and that the platform Helm
-   chart is configured with the same etcd endpoint. Omit the annotation to use the default.
-3. **`ETCD_ENDPOINTS` / `NATS_SERVER` env var names** — confirm these are the runtime's
-   expected variable names, and whether the operator already injects the coordination-plane
-   endpoints from the platform Helm chart (in which case our explicit values just reassert
-   them). If the operator owns them, these can be dropped.
-4. **Planner `--config` schema + mocker as a scaling target** — confirm the config keys
-   (`environment`, `backend`, `optimization_target`, `enable_load_scaling`,
-   `enable_throughput_scaling`, `load_adjustment_interval_seconds`) for the pinned release,
-   and that `"backend": "mocker"` is accepted. The SLA planner path normally needs a real
-   backend + profiling data; if mocker isn't a valid target, either use `"backend": "vllm"`
-   with profile data or drive pool scaling manually for experiment (B).
-5. **mocker `--planner-profile-data`** — upstream mocker examples pass
-   `/workspace/components/src/dynamo/planner/tests/data/profiling_results/H200_TP1P_TP1D`
-   (timing profile shipped in the image). Confirm this path exists in the pinned image, or
-   drop the flag if the mocker no longer requires it.
-6. **DGD `resources` schema** — confirm `cpu`/`memory` are accepted as top-level keys under
-   `resources.requests` / `resources.limits`. Upstream examples only demonstrate `gpu` and
-   `custom.<name>` (e.g. `requests.custom.ephemeral-storage`); if cpu/memory must go under
-   `custom`, adjust accordingly.
-7. **`--num-workers 1`** — per the shared spec; confirm the mocker accepts it (runs N
-   in-process simulated workers). Upstream deploy examples scale via pod `replicas` instead.
-8. **`--model-name`** — carried over from the upstream mocker example alongside
-   `--model-path`. Confirm both are still valid flags; `--model-name` may be optional.
-9. **`DYN_SYSTEM_PORT=8081`** — the operator often defaults this to `9090` in Kubernetes;
-   the spec pins `8081`. Confirm the `monitoring` scrape config targets `8081`.
+These version-sensitive assumptions were checked against the pinned release from primary
+sources (upstream repo files at tag `v1.3.0`, the operator Go source, the planner Python
+source, and docs.nvidia.com/dynamo). They are **docs/source-verified, not yet live-verified** —
+re-check on the first real `make up`.
+
+1. **Image** — `nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.3.0` ships the `dynamo.mocker`
+   module (`python3 -m dynamo.mocker`) and runs CPU-only (`docs/dynosim/mocker.md`;
+   `examples/backends/mocker/deploy/agg.yaml`). There is no dedicated mocker image.
+2. **etcd discovery-backend annotation** — `nvidia.com/dynamo-discovery-backend: etcd` opts
+   into legacy KV-store discovery; Kubernetes-native discovery is the v1.3.0 default
+   (`consts.go`; `docs/kubernetes/service-discovery.md`). Omit the annotation to use the default.
+3. **`ETCD_ENDPOINTS` / `NATS_SERVER`** — these are the operator's own env var names
+   (`graph.go` `AddStandardEnvVars`). The operator also injects them from the platform chart's
+   coordination plane; our explicit pod-spec values override (`MergeEnvs`) and are harmless.
+4. **Planner `--config`** — all keys are real `PlannerConfig` fields and `"backend": "mocker"`
+   is a valid target. `optimization_target` is `Literal["throughput","latency","load","sla"]`;
+   we use `"throughput"` (the default) — `"load"` requires prefill/decode threshold keys and
+   `"none"` is invalid, both raising at config validation (`planner_config.py`).
+5. **mocker `--planner-profile-data`** — **optional** (default `None` → hardcoded polynomials).
+   Kept to match upstream; the `H200_TP1P_TP1D` profile ships in the repo/image at v1.3.0.
+6. **DGD `resources`** — `cpu`/`memory` are valid top-level keys under `requests`/`limits`
+   (operator `ResourceItem`; CRD examples `"1000m"`/`"4Gi"`).
+7. **`--num-workers 1`** — a valid mocker flag (default 1); upstream deploys scale via pod
+   `replicas` instead, so `1` here is a harmless no-op kept per the shared spec.
+8. **`--model-name`** — optional (defaults from `--model-path`); both are valid mocker flags,
+   and upstream passes both as we do.
+9. **`DYN_SYSTEM_PORT` / metrics ports** — the operator gives workers + Planner a stock system
+   port of `9090`, and leaves the Frontend's system server **disabled by default**
+   (`DYN_SYSTEM_PORT` defaults to `-1`). This lab sets `DYN_SYSTEM_PORT=8081` on the Frontend +
+   workers and `PLANNER_PROMETHEUS_PORT=8081` on the Planner (metrics default `9085`), so every
+   `metrics` port binds on `8081` and the PodMonitor scrapes land.
+
+## Still to verify live (needs a running cluster)
+
+- The **component-type pod labels** the operator actually stamps on running pods. The chaos
+  selectors (`chaos/experiments/pod-kill-{prefill,decode}.yaml`) match the alpha-era form
+  (`nvidia.com/dynamo-component-type: worker` + `dynamo-sub-component-type: prefill|decode`);
+  native v1beta1 pods may instead carry `dynamo-component-type: prefill|decode` directly. Check
+  a live pod's labels before relying on the selector pairing.
 
 ## Upstream provenance
 

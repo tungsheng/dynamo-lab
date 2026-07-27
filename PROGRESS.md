@@ -16,8 +16,11 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 - [x] **GitHub-ready** — Apache-2.0 LICENSE, CI (shellcheck · yamllint · `terraform
   fmt`/`validate`), issue/PR templates, CODEOWNERS, Dependabot, committed provider
   lock files. All three linters verified green locally. Published as a public repo.
+- [x] **Fleet + operator verified against Dynamo v1.3.0** — resolved 46 `# VERIFY:` markers in
+  the fleet manifests, operator install, and metrics wiring against upstream primary sources;
+  fixed 6 real defects (Pass 4 below). Docs/source-verified, not yet live-verified.
 - [ ] **First `make up` against AWS** — NOT yet run. Nothing has been applied to a real account.
-- [ ] **Resolve remaining `# VERIFY` markers** against a pinned Dynamo release (see below).
+- [ ] **Resolve remaining `# VERIFY` markers** (80 left: observability / coordination / chaos / infra).
 - [ ] **First end-to-end experiment** — spike + chaos on the disaggregated fleet.
 
 ## What's built
@@ -67,33 +70,53 @@ Highlights:
 - **Wiring the node split (ADR 0008):** tainted the Karpenter `workers` NodePool and steered
   only the mocker workers onto it, so the planner's pod-scaling triggers node scaling.
 - Added a default encrypted **gp3 StorageClass** (PVCs had no StorageClass); pinned the fleet
-  image to `${DYNAMO_VERSION}`; planner `optimization_target` `none` → `load`; fleet readiness
-  now selects the operator's `nvidia.com/dynamo-component-type` label.
+  image to `${DYNAMO_VERSION}`; planner `optimization_target` `none` → `load` (later corrected to
+  `throughput` in Pass 4); fleet readiness now selects the `nvidia.com/dynamo-component-type` label.
+
+**Pass 4 — fleet & operator verification against Dynamo v1.3.0** (parallel research +
+adversarial review, all against primary upstream sources: repo files at tag `v1.3.0`, the
+operator Go source, the planner Python source, docs.nvidia.com/dynamo). Resolved 46 `# VERIFY:`
+markers and fixed 6 defects:
+
+- **`dynamo-crds` chart is gone at v1.3.0** — CRDs ship in the operator image (`crd-apply` init
+  container, `upgradeCRD` default true). Dropped the separate chart install + `DYNAMO_CRDS_VERSION`
+  pin; `platform.sh` now installs only `dynamo-platform`.
+- **Operator had no NATS address** — bundled etcd/NATS subcharts are disabled but
+  `dynamo-operator.natsAddr`/`etcdAddr` were never set. Added, pointing at the lab's HA plane.
+- **Planner would crash** — `optimization_target: "load"` requires prefill/decode threshold keys
+  or it raises at config validation; switched to `"throughput"` (the default, which force-enables
+  load scaling for non-SLA targets — the lab's intent). The README said the invalid `"none"`.
+- **Dead metrics scrape targets** — the Frontend declared a `:8081 metrics` port but never set
+  `DYN_SYSTEM_PORT` (its system server is off by default, `-1`), and the Planner binds `9085`, not
+  the declared `8081`. Added `DYN_SYSTEM_PORT=8081` (Frontend) and `PLANNER_PROMETHEUS_PORT=8081`
+  (Planner).
+- **Wrong operator metrics keys** — `metrics.enabled` / `metrics.serviceMonitor.enabled` don't
+  exist in the v1.3.0 subchart; the key is `metricsService.enabled`. Fixed.
+- Confirmed-correct (markers resolved, no value change): image `dynamo-planner:1.3.0` (CPU-only,
+  ships the mocker), the etcd discovery annotation, the DGD schema (services map, `componentType`,
+  inline `extraPodSpec` PodSpec, cpu/memory resources), mocker CLI flags, env var names, and the
+  `<dgd>-frontend` Service name.
 
 ## Outstanding — before the first `make up`
 
-Never applied to AWS. Resolve these `# VERIFY:` markers (`grep -rn VERIFY .`) against the
-Dynamo release you pin:
+Never applied to AWS. The fleet manifests + Dynamo operator install are now verified against
+v1.3.0 (Pass 4); the remaining `grep -rn VERIFY .` markers (80) live in the other layers:
 
-1. **Versions**: `DYNAMO_VERSION=1.3.0` (dynamo-planner image — must ship the mocker wheel,
-   CPU-only), `DYNAMO_CRDS_VERSION=0.9.1`, `DYNAMO_PLATFORM_VERSION=1.3.0`, and the NGC chart
-   repo URL + chart names.
-2. **Fleet schema**: `DynamoGraphDeployment` fields; the planner `--config`
-   (`optimization_target: "load"`); the `extraPodSpec` nodeSelector/tolerations field path for
-   the worker node-split; the Frontend/Planner `metrics` port (`DYN_SYSTEM_PORT=8081`, and
-   whether it must be set in their envs to bind).
-3. **Labels**: the operator's `nvidia.com/dynamo-component-type` pod label (used by
-   `podmonitor-fleet.yaml`, `fleet.sh` readiness, and the chaos selectors) and the
-   `<dgd>-frontend` Service name k6 targets.
-4. **Infra versions**: EKS `1.31`, Karpenter chart `1.0.8`, AL2023 AMI alias, bitnami/etcd tag.
-5. **Security**: set `cluster_endpoint_public_access_cidrs` in `terraform/main/dev.tfvars`
+1. **Platform chart versions** — etcd, NATS, kube-prometheus-stack, Loki, Tempo, promtail, and
+   chaos-mesh chart versions (`scripts/platform.sh`), plus the bitnami image-repo relocation.
+2. **Live-only fleet checks** — the component-type pod labels the operator actually stamps (the
+   disagg chaos selectors assume the alpha-era `worker` + `sub-component-type` pairing), and the
+   `metricsService`/PodMonitor scrape once a cluster exists.
+3. **Infra versions**: EKS `1.31`, Karpenter chart `1.0.8`, AL2023 AMI alias, bitnami/etcd tag.
+4. **Security**: set `cluster_endpoint_public_access_cidrs` in `terraform/main/dev.tfvars`
    (now honored) to your egress CIDR.
-6. **Prereqs on your machine**: `terraform >= 1.10`, `envsubst` (gettext), `aws`/`kubectl`/`helm`.
+5. **Prereqs on your machine**: `terraform >= 1.10`, `envsubst` (gettext), `aws`/`kubectl`/`helm`.
    The system node group is **3× m7i.large** (etcd HA).
 
 ## Known limitations
 
-- Never deployed; all upstream Dynamo specifics are best-effort and `# VERIFY`-tagged.
+- Never deployed. The fleet + operator specifics are verified against v1.3.0 (docs/source, not
+  live); the observability/coordination/chaos/infra layers are still best-effort, `# VERIFY`-tagged.
 - Trace→logs correlation (Tempo→Loki `service_name`) is PLAUSIBLE-only until verified live.
 - The chaos annotation bridge installs its Python deps at pod start (no custom image); fine for
   a lab, bake an image if you want it hardened.

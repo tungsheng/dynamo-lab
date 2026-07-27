@@ -1,8 +1,7 @@
 # platform/operator — NVIDIA Dynamo Kubernetes Operator + CRDs
 
-Installs the Dynamo Kubernetes Platform: first the **CRDs** chart (`dynamo-crds`), then the
-**platform** chart (`dynamo-platform`, which contains the operator). See ADR
-`docs/adr/0002-operator-and-graph-deployment-crd.md`.
+Installs the Dynamo Kubernetes Platform via the **platform** chart (`dynamo-platform`, which
+contains the operator). See ADR `docs/adr/0002-operator-and-graph-deployment-crd.md`.
 
 - Namespace: **dynamo-system**
 - CRD API the fleet uses: `nvidia.com/v1alpha1` (`DynamoGraphDeployment`)
@@ -11,36 +10,38 @@ Installs the Dynamo Kubernetes Platform: first the **CRDs** chart (`dynamo-crds`
   operator can manage DGDs in the `dynamo` namespace.
 - We do **not** use the etcd/NATS bundled by this chart — the lab runs its own HA
   coordination plane (see `platform/coordination/`), so `values-dynamo-platform.yaml`
-  disables them.
+  disables them (`global.{etcd,nats}.install: false`) and points the operator at ours via
+  `dynamo-operator.natsAddr` / `etcdAddr`.
 
-## Charts / versions (pinned)
+## CRDs are managed by the operator (no separate chart)
 
-| Chart            | Repo                                             | Version (VERIFY) |
-|------------------|--------------------------------------------------|------------------|
-| `dynamo-crds`    | `https://helm.ngc.nvidia.com/nvidia/ai-dynamo`   | `0.9.1`          |
-| `dynamo-platform`| `https://helm.ngc.nvidia.com/nvidia/ai-dynamo`   | `1.3.0`          |
+Verified against **ai-dynamo/dynamo v1.3.0**: there is **no standalone `dynamo-crds` chart**.
+The cluster-wide operator owns the CRDs and applies them from its own image via a `crd-apply`
+init container (gated by `dynamo-operator.upgradeCRD`, default `true`). So the install is a
+single `dynamo-platform` release — the earlier two-step `dynamo-crds`-then-`dynamo-platform`
+flow is obsolete. (Sources: `docs/kubernetes/installation-guide.md`,
+`docs/kubernetes/dynamo-operator.md`, `deploy/helm/charts/platform/Chart.yaml`.)
 
-> NGC "latest" at build time: `dynamo-crds` 0.9.1 (2026-03-04), `dynamo-platform` 1.3.0
-> (2026-07-22). The three Dynamo charts (crds / platform / graph) version independently —
-> always run `helm search repo nvidia-ai-dynamo --versions` before installing and keep the
-> platform version in step with the `DYNAMO_VERSION` used for the mocker image in `fleet/`.
-> The NGC charts are served over **HTTPS** (`helm repo add`), not `oci://`.
+## Chart / version (pinned)
+
+| Chart             | Repo                                             | Version |
+|-------------------|--------------------------------------------------|---------|
+| `dynamo-platform` | `https://helm.ngc.nvidia.com/nvidia/ai-dynamo`   | `1.3.0` |
+
+> `dynamo-platform` 1.3.0 is the latest stable release (2026-07-22). Keep the platform
+> version in step with the `DYNAMO_VERSION` used for the mocker image in `fleet/`. The NGC
+> chart is served over **HTTPS** (`helm repo add`), not `oci://`.
 
 ## Install
 
 ```sh
 # 1. Add the NGC Dynamo helm repo (public, no NGC API key needed for these charts).
-#    VERIFY: repo URL + that these charts are anonymous-pullable on the pinned release.
 helm repo add nvidia-ai-dynamo https://helm.ngc.nvidia.com/nvidia/ai-dynamo
 helm repo update
 
-# 2. CRDs first (cluster-scoped; installed CRD contents are pinned to the release tag).
-helm upgrade --install dynamo-crds nvidia-ai-dynamo/dynamo-crds \
-  --version 0.9.1 \
-  --namespace dynamo-system --create-namespace \
-  --wait
-
-# 3. Platform (operator). Uses our values to disable bundled etcd/NATS and watch all namespaces.
+# 2. Platform (operator). Our values disable bundled etcd/NATS, point the operator at the
+#    lab's coordination plane, and let it watch all namespaces. The operator's crd-apply init
+#    container installs the DynamoGraphDeployment CRDs automatically.
 helm upgrade --install dynamo-operator nvidia-ai-dynamo/dynamo-platform \
   --version 1.3.0 \
   --namespace dynamo-system --create-namespace \
@@ -48,14 +49,16 @@ helm upgrade --install dynamo-operator nvidia-ai-dynamo/dynamo-platform \
   --wait
 ```
 
-> Release names per the shared spec: `dynamo-crds` and `dynamo-operator`. (The operator ships
-> inside the `dynamo-platform` chart; we name that release `dynamo-operator`.)
+> Release name per the shared spec: `dynamo-operator`. (The operator ships inside the
+> `dynamo-platform` chart; we name that release `dynamo-operator`.)
 
 ## Uninstall
 
 ```sh
 helm uninstall dynamo-operator -n dynamo-system
-helm uninstall dynamo-crds     -n dynamo-system   # removes CRDs -> deletes any remaining DGDs
+# CRDs installed by the operator are cluster-scoped and are NOT removed by the helm uninstall;
+# delete them explicitly if you want them gone (this also deletes any remaining DGDs):
+#   kubectl get crd -o name | grep nvidia.com | xargs -r kubectl delete
 ```
 
 ## Verify
@@ -63,5 +66,6 @@ helm uninstall dynamo-crds     -n dynamo-system   # removes CRDs -> deletes any 
 ```sh
 kubectl -n dynamo-system get deploy,pods
 kubectl get crd | grep nvidia.com          # expect dynamographdeployments.nvidia.com, etc.
-kubectl -n dynamo-system logs deploy/dynamo-operator-controller-manager   # VERIFY: deploy name
+# Operator controller deployment name (check the actual name in your release):
+kubectl -n dynamo-system logs deploy/dynamo-operator-controller-manager
 ```

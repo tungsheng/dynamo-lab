@@ -33,14 +33,14 @@ ETCD_CHART="oci://registry-1.docker.io/bitnamicharts/etcd"
 ETCD_CHART_VERSION="${ETCD_CHART_VERSION:-10.7.1}"     # VERIFY: bitnami etcd chart version
 NATS_CHART_VERSION="${NATS_CHART_VERSION:-1.2.11}"     # VERIFY: nats/nats chart version
 
-# Dynamo operator + CRDs.
-# NGC serves these Helm charts over HTTPS (`helm repo add`), NOT oci:// — see
+# Dynamo operator (+ CRDs, which ship inside the operator image).
+# Verified v1.3.0: NGC serves the chart over HTTPS (`helm repo add`), NOT oci:// — see
 # platform/operator/README.md + values-dynamo-platform.yaml. The repo is added in
-# add_repos() and the charts are installed by reference (<repo>/<chart>) in install_operator.
-# VERIFY: registry URL + chart names (dynamo-crds / dynamo-platform) for the pinned release.
-REPO_DYNAMO="${REPO_DYNAMO:-https://helm.ngc.nvidia.com/nvidia/ai-dynamo}"   # VERIFY
-DYNAMO_CRDS_CHART="${DYNAMO_CRDS_CHART:-nvidia-ai-dynamo/dynamo-crds}"        # VERIFY
-DYNAMO_OPERATOR_CHART="${DYNAMO_OPERATOR_CHART:-nvidia-ai-dynamo/dynamo-platform}"  # VERIFY: chart name (dynamo-platform vs dynamo-operator)
+# add_repos() and the chart is installed by reference (<repo>/<chart>) in install_operator.
+# As of v1.3.0 there is NO standalone dynamo-crds chart: the operator's crd-apply init
+# container applies the CRDs, so only dynamo-platform is installed.
+REPO_DYNAMO="${REPO_DYNAMO:-https://helm.ngc.nvidia.com/nvidia/ai-dynamo}"
+DYNAMO_OPERATOR_CHART="${DYNAMO_OPERATOR_CHART:-nvidia-ai-dynamo/dynamo-platform}"
 
 # Observability.
 KPS_VERSION="${KPS_VERSION:-66.3.1}"          # VERIFY: kube-prometheus-stack chart version
@@ -132,13 +132,9 @@ install_coordination() {
 install_operator() {
   step "Dynamo operator + CRDs (ns ${NS_DYNAMO_SYSTEM})"
 
-  # CRDs first, then the platform/operator chart. The CRDs chart ships no lab
-  # values overrides, so no -f flags here.
-  helm upgrade --install "$REL_DYNAMO_CRDS" "$DYNAMO_CRDS_CHART" \
-    --version "$DYNAMO_CRDS_VERSION" -n "$NS_DYNAMO_SYSTEM" \
-    --wait --timeout "$HELM_WAIT_TIMEOUT"
-  ok "dynamo CRDs installed"
-
+  # Verified v1.3.0: install only the dynamo-platform chart. The operator image's crd-apply
+  # init container applies the DynamoGraphDeployment CRDs (dynamo-operator.upgradeCRD defaults
+  # to true), so there is no separate dynamo-crds chart to install first.
   # shellcheck disable=SC2046
   helm upgrade --install "$REL_DYNAMO_OPERATOR" "$DYNAMO_OPERATOR_CHART" \
     --version "$DYNAMO_PLATFORM_VERSION" -n "$NS_DYNAMO_SYSTEM" \
@@ -275,7 +271,6 @@ platform_down() {
   helm_uninstall "$REL_KPS" "$NS_MONITORING"
 
   helm_uninstall "$REL_DYNAMO_OPERATOR" "$NS_DYNAMO_SYSTEM"
-  helm_uninstall "$REL_DYNAMO_CRDS" "$NS_DYNAMO_SYSTEM"
 
   helm_uninstall "$REL_NATS" "$NS_DYNAMO"
   helm_uninstall "$REL_ETCD" "$NS_DYNAMO"

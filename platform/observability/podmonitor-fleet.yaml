@@ -21,14 +21,17 @@ spec:
       - dynamo
   selector:
     matchExpressions:
-      # VERIFY: operator component-type label contract — the key the operator stamps on
-      # fleet component pods (frontend/worker/planner). Must match fleet/*.yaml + chaos/.
+      # Verified v1.3.0: nvidia.com/dynamo-component-type is the operator's component-type label
+      # key (consts.go). `Exists` matches every fleet component pod (frontend/worker/planner).
       - key: nvidia.com/dynamo-component-type
         operator: Exists
   podMetricsEndpoints:
-    # VERIFY: DYN_SYSTEM_PORT=8081, exposed as the named `metrics` port on the worker pods
-    # (fleet/*.yaml). The spec pins 8081; the operator sometimes defaults it to 9090 —
-    # confirm the named port + value against the running pods.
+    # The named `metrics` port is 8081 on every fleet pod (fleet/*.yaml). Verified v1.3.0: the
+    # operator gives workers + Planner a stock system port of 9090 and leaves the Frontend's
+    # system server DISABLED by default (DYN_SYSTEM_PORT defaults to -1). This lab sets
+    # DYN_SYSTEM_PORT=8081 (Frontend + workers) and PLANNER_PROMETHEUS_PORT=8081 (Planner, whose
+    # metrics default is 9085), so every component serves metrics on 8081 and one PodMonitor
+    # covers them all.
     - port: metrics
       path: /metrics
       interval: 15s

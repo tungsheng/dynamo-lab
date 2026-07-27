@@ -10,47 +10,59 @@
 # Chart: dynamo-platform   Repo: https://helm.ngc.nvidia.com/nvidia/ai-dynamo
 # Namespace: dynamo-system
 #
-# VERIFY: pinned chart version — NGC "latest" for dynamo-platform was 1.3.0 at build time
-#         (main-branch Chart.yaml already reads 1.4.0 as an unreleased dev bump). Run
-#         `helm search repo nvidia-ai-dynamo/dynamo-platform --versions` and pin the release
-#         that matches DYNAMO_VERSION used for the mocker image (see fleet/).
-# VERIFY: the exact global toggle keys below (global.etcd.install / global.nats.install /
-#         global.grove.install / global.kai-scheduler.install) against the pinned chart's
-#         values.yaml — key names have shifted across Dynamo releases.
+# Verified v1.3.0: chart dynamo-platform version 1.3.0 (deploy/helm/charts/platform/Chart.yaml),
+#         the latest stable release. As of v1.3.0 the CRDs ship in the operator image and are
+#         applied by its crd-apply init container — there is no standalone dynamo-crds chart.
+# Verified v1.3.0: the global toggle keys below (global.etcd.install / global.nats.install /
+#         global.grove.install / global.kai-scheduler.install) match the chart's dependency
+#         conditions (Chart.yaml). global.nats.install defaults true since 1.1.0, so the
+#         explicit false matters.
 
 global:
   # We manage etcd + NATS ourselves (HA, ns `dynamo`). Do NOT let the platform chart install them.
+  # Verified v1.3.0: global.{etcd,nats,grove,kai-scheduler}.install are the chart's dependency
+  # condition keys (Chart.yaml); install:false disables each bundled subchart.
   etcd:
-    install: false          # VERIFY: key path for disabling the bundled bitnami/etcd subchart
+    install: false
   nats:
-    install: false          # VERIFY: key path for disabling the bundled nats subchart
+    install: false
   # Optional schedulers/orchestrators shipped with the platform chart — not needed for a
   # CPU-only mocker lab. Keep them off to minimize moving parts.
   grove:
-    install: false          # VERIFY: grove subchart toggle key
+    install: false
   kai-scheduler:
-    install: false          # VERIFY: kai-scheduler subchart toggle key
+    install: false
 
 dynamo-operator:
   enabled: true
+
+  # This lab runs its own HA etcd + NATS in ns `dynamo` (global.{etcd,nats}.install=false above),
+  # so the operator has no bundled coordination plane to auto-discover — point it at ours.
+  # Verified v1.3.0 (platform values.yaml): dynamo-operator.natsAddr / etcdAddr are the keys for
+  # an external instance (there are no externalNats/externalEtcd keys). natsAddr is required —
+  # the operator injects NATS_SERVER from it; etcdAddr matters because the fleet opts into etcd
+  # discovery (nvidia.com/dynamo-discovery-backend=etcd).
+  natsAddr: "nats://nats.dynamo.svc.cluster.local:4222"
+  etcdAddr: "http://etcd.dynamo.svc.cluster.local:2379"
 
   # The operator must reconcile DynamoGraphDeployments that live in the `dynamo` namespace
   # while the operator itself runs in `dynamo-system`. By default the operator is restricted
   # to its own release namespace, which would leave our fleet unmanaged. Disable the
   # restriction so it watches all namespaces (fine for a single-tenant lab).
-  # VERIFY: namespaceRestriction.enabled is the correct key on the pinned chart; some releases
-  #         instead expose `namespaceRestriction.targetNamespace: dynamo` or a
-  #         `controllerManager.watchNamespaces` list. Confirm against the operator subchart values.
+  # Verified v1.3.0: namespaceRestriction.enabled=false runs the operator CLUSTER-WIDE (watches
+  # all namespaces) — what the lab needs. Restricted mode (enabled: true + targetNamespace) is
+  # single-namespace, "development and testing only", and also requires upgradeCRD=false.
   namespaceRestriction:
     enabled: false
 
   # Expose operator metrics to Prometheus. kube-prometheus-stack is configured with
   # serviceMonitorSelectorNilUsesHelmValues=false so it will pick this ServiceMonitor up.
-  # VERIFY: metrics/serviceMonitor value keys on the pinned chart.
-  metrics:
+  # Verified v1.3.0: the operator subchart controls this via `metricsService.enabled`
+  # (null=auto-detect — Service always, ServiceMonitor if prometheus-operator CRDs exist;
+  # true=always create both), NOT a metrics.serviceMonitor block. `true` forces both, and the
+  # lab installs kube-prometheus-stack so the CRDs are present.
+  metricsService:
     enabled: true
-    serviceMonitor:
-      enabled: true
 
   # Label first-party resources for lab-wide selection/annotation.
   commonLabels:

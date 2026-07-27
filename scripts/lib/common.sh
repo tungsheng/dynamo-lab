@@ -46,27 +46,27 @@ CLUSTER_NAME="${CLUSTER_NAME:-dynamo-lab}"
 PROJECT="${PROJECT:-dynamo-lab}"
 
 # Pinned Dynamo MOCKER IMAGE tag. Shared with fleet manifests via env. This is the
-# container image tag ONLY — the two Dynamo helm charts version independently (below).
-# Aligned with DYNAMO_PLATFORM_VERSION (1.3.0); the dynamo-planner image (which carries the
-# mocker wheel) needs >= 1.1.0, so the old 0.3.2 tag was invalid for that image.
-# VERIFY: must be a real dynamo-planner image tag that ships the mocker wheel and runs CPU-only.
+# container image tag ONLY — the Dynamo platform helm chart versions independently (below).
+# Verified v1.3.0: nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.3.0 ships the dynamo.mocker
+# module and runs CPU-only (docs/dynosim/mocker.md; examples/backends/mocker/deploy/agg.yaml).
 DYNAMO_VERSION="${DYNAMO_VERSION:-1.3.0}"
 export DYNAMO_VERSION
 
-# Dynamo helm CHART versions — independent of DYNAMO_VERSION (the mocker image tag) and
-# of each other. See platform/operator/README.md (dynamo-crds 0.9.1, dynamo-platform 1.3.0).
-DYNAMO_CRDS_VERSION="${DYNAMO_CRDS_VERSION:-0.9.1}"       # VERIFY: dynamo-crds chart version
-DYNAMO_PLATFORM_VERSION="${DYNAMO_PLATFORM_VERSION:-1.3.0}" # VERIFY: dynamo-platform chart version
+# Dynamo platform helm CHART version — independent of DYNAMO_VERSION (the mocker image tag).
+# Verified v1.3.0 (deploy/helm/charts/platform/Chart.yaml: name dynamo-platform, version 1.3.0).
+# The standalone dynamo-crds chart is GONE as of v1.3.0 — the operator image applies the CRDs
+# via its crd-apply init container, so there is no separate CRDs chart/version to pin.
+DYNAMO_PLATFORM_VERSION="${DYNAMO_PLATFORM_VERSION:-1.3.0}"
 
 # --------------------------------------------------------------------------
 # Load-test fleet topology selector (INDEPENDENT of the k6 traffic PROFILE)
 # --------------------------------------------------------------------------
 # TOPOLOGY picks which deployed fleet the load runner targets: agg | disagg.
-# The Dynamo operator names the frontend Service "<dgd-name>-frontend"; our DGDs
-# are mocker-agg / mocker-disagg (fleet/agg.yaml, fleet/disagg.yaml), so the
-# frontend Service is mocker-<topology>-frontend on :8000. FRONTEND_URL may also
-# be overridden directly (e.g. for a port-forward).
-# VERIFY: operator names the frontend Service <dgd-name>-frontend
+# Verified v1.3.0: the operator names the frontend Service "<dgd-name>-frontend" on :8000
+# (operator graph.go GetDCDResourceName + the Frontend service case). Our DGDs are
+# mocker-agg / mocker-disagg (fleet/agg.yaml, fleet/disagg.yaml), so the frontend Service is
+# mocker-<topology>-frontend on :8000. FRONTEND_URL may also be overridden directly (e.g. for
+# a port-forward).
 TOPOLOGY="${TOPOLOGY:-agg}"
 FRONTEND_URL="${FRONTEND_URL:-http://mocker-${TOPOLOGY}-frontend.dynamo.svc.cluster.local:8000}"
 
@@ -96,7 +96,6 @@ ALL_NAMESPACES=(
 # --------------------------------------------------------------------------
 # Helm release names (exact — see SHARED SPEC)
 # --------------------------------------------------------------------------
-REL_DYNAMO_CRDS="dynamo-crds"
 REL_DYNAMO_OPERATOR="dynamo-operator"
 REL_KPS="kube-prometheus-stack"
 REL_LOKI="loki"
