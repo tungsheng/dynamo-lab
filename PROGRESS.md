@@ -36,6 +36,11 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
   yet exercised.
 - [ ] **Resolve remaining `# VERIFY` markers** (observability / coordination / chaos / load /
   scripts). Terraform/infra fully resolved; the fleet layer is now **live-validated**.
+- [ ] **Track G — Grove gang-scheduling (GPU-free), additive.** New optional track (ADR
+  [0009](docs/adr/0009-track-g-grove-gang-scheduling.md)) to observe Dynamo's Grove gang
+  scheduling, multi-level autoscaling, and topology-aware placement with the mocker — no GPUs,
+  no change to the A/B/C roadmap or the default `make up`. Planning + ADR landed; platform
+  scaffolding in progress. (Track N / NIXL data plane deferred — it needs real GPUs.)
 
 ## What's built
 
@@ -213,6 +218,36 @@ end-to-end; what remains:
    `!example.tfvars` exception.
 5. **Prereqs on your machine**: `terraform >= 1.10`, `envsubst` (gettext), `aws`/`kubectl`/`helm`.
    The system node group is **3× m7i.large** (etcd HA).
+
+## Track G — Grove gang-scheduling (GPU-free, additive)
+
+A new **optional track** that observes Dynamo's [Grove](https://github.com/NVIDIA/grove)
+orchestration layer — gang scheduling, hierarchical (multi-level) autoscaling of the
+prefill+decode unit, topology-aware placement, custom startup ordering — with the existing
+**mocker** fleet. Grove is a *control-plane* concern, so it needs **no GPUs**: the mocker runs
+Dynamo's real operator/planner paths while simulating compute. Gated behind its own switch; the
+default `make up`/`down` and the A/B/C experiments are unchanged. Rationale + non-goals in ADR
+[0009](docs/adr/0009-track-g-grove-gang-scheduling.md).
+
+**Non-goal (deferred): Track N / NIXL.** The NIXL KV-transfer data plane only moves real KV
+tensors, which the mocker never produces — a meaningful test needs real GPUs (+ RDMA/EFA), a
+real-cost experiment that breaks `$0` idle. It gets its own ADR + GPU node class if pursued.
+
+**Work items** (the change surface; additive — nothing here reorders the roadmap above):
+
+1. [ ] **`platform/grove/` scaffolding** — Grove operator + KAI-Scheduler install values +
+   README, `# VERIFY:`'d against a pinned Grove/KAI release. *(in progress)*
+2. [ ] **`platform.sh` wiring** — an optional `install_grove()` gated behind `GROVE=1`
+   (default off) so the default bring-up is untouched.
+3. [ ] **`fleet/grove-scale.yaml`** — a mocker DGD deployed via Grove with a
+   `PodCliqueScalingGroup` for the P/D unit and high replica knobs, to create real
+   gang-scheduling pressure.
+4. [ ] **`make track-g-up` / `track-g-down`** — install Grove + apply the overlay as one step,
+   kept separate from `fleet-up PROFILE=…`.
+5. [ ] **Observability** — a PodMonitor + a Grafana panel for KAI-Scheduler / PodGang state
+   (scheduled vs gang-blocked `Pending`), so gang formation is watchable next to the fleet.
+6. [ ] **`CONTEXT.md` vocabulary** — Grove, PodGang / gang scheduling, Track G / Track N.
+7. [x] **ADR 0009** — decision, GPU-free rationale, Track N deferral. *(done)*
 
 ## Known limitations
 
