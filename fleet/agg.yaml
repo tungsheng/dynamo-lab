@@ -1,9 +1,11 @@
 # dynamo-lab :: fleet :: AGGREGATED profile
 #
 # One DynamoGraphDeployment (DGD), reconciled by the Dynamo operator (ns dynamo-system),
-# that declares the whole fleet as a single unit: Frontend (OpenAI API + KV router),
-# Planner (autoscaler), and a single aggregated Mocker worker pool (each worker does BOTH
-# prefill and decode). This is the bring-up / scaffolding topology (see docs/adr/0007).
+# that declares the whole fleet as a single unit: Frontend (OpenAI API + KV router) and a
+# single aggregated Mocker worker pool (each worker does BOTH prefill and decode). This is the
+# bring-up / scaffolding topology (see docs/adr/0007). No Planner here: its KubernetesConnector
+# requires the disaggregated prefill/decode split, so the planner (experiment B) runs on
+# fleet/disagg.yaml. See the note above the MockerWorker service below.
 #
 # Workers are Dynamo's GPU-free **mocker** (`python3 -m dynamo.mocker`): real router/planner
 # code path, simulated KV-cache + prefill/decode timing. No GPUs, no model weights.
@@ -15,7 +17,8 @@
 #   - namespace dynamo; coordination plane wired to the etcd/nats DNS in the shared spec
 #   - model Qwen/Qwen3-0.6B (tokenizer/config only); worker resources shrunk for granular
 #     pod-scaling; KV-aware routing on; DYN_SYSTEM_PORT metrics; OTLP traces -> Tempo
-#   - a Planner service added (upstream mocker example ships none) to observe experiment (B)
+#   - Planner intentionally omitted in agg (disagg-only; see MockerWorker note). Experiment (B)
+#     autoscaling runs on fleet/disagg.yaml.
 #
 # Verified against ai-dynamo/dynamo v1.3.0 (sources in fleet/README.md):
 #   - image nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.3.0 ships the dynamo.mocker module and
@@ -96,76 +99,14 @@ spec:
               name: metrics
 
     # ---------------------------------------------------------------------------------
-    # Planner: watches load and drives autoscaling of the worker pool via the operator.
-    # This is the subject of experiment (B). KubernetesConnector is selected by
-    # `"environment": "kubernetes"` in the planner config -> the planner edits DGD service
-    # replicas through the Kubernetes API. VirtualConnector (`"environment": "virtual"`) is
-    # the fallback for local/dry-run where no operator is present.
-    # ---------------------------------------------------------------------------------
-    Planner:
-      componentType: planner
-      replicas: 1
-      resources:
-        requests:
-          cpu: "250m"
-          memory: "512Mi"
-        limits:
-          cpu: "1"
-          memory: "1Gi"
-      envs:
-        - name: ETCD_ENDPOINTS
-          value: http://etcd.dynamo.svc.cluster.local:2379
-        - name: NATS_SERVER
-          value: nats://nats.dynamo.svc.cluster.local:4222
-        # Bind the planner's Prometheus metrics on :8081 to match the `metrics` port below.
-        # Verified v1.3.0: the planner serves metrics on PLANNER_PROMETHEUS_PORT (default 9085,
-        # component_planner.go), not DYN_SYSTEM_PORT — override to 8081 or the scrape is dead.
-        - name: PLANNER_PROMETHEUS_PORT
-          value: "8081"
-        - name: DYN_LOGGING_JSONL
-          value: "true"
-        - name: OTEL_EXPORT_ENABLED
-          value: "true"
-        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
-          value: http://tempo.monitoring.svc.cluster.local:4317
-        - name: OTEL_EXPORTER_OTLP_PROTOCOL
-          value: grpc
-        - name: OTEL_SERVICE_NAME
-          value: dynamo-planner
-      extraPodSpec:
-        mainContainer:
-          # Dynamo >= 1.1.0 requires the dedicated planner image (ships kubernetes_asyncio,
-          # pmdarima, prophet, aiconfigurator that backend runtime images no longer carry).
-          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
-          ports:
-            # Named `metrics` port so podmonitor-fleet.yaml can scrape the Planner too.
-            # Verified v1.3.0: the planner's Prometheus metrics bind PLANNER_PROMETHEUS_PORT
-            # (set to 8081 in the envs above) so this port is live.
-            - containerPort: 8081
-              name: metrics
-          command:
-            - python3
-            - -m
-            - dynamo.planner
-          args:
-            # Verified v1.3.0 (components/src/dynamo/planner/config/planner_config.py):
-            # "environment":"kubernetes" -> KubernetesConnector (edits DGD replicas via the
-            # operator; "virtual" is the no-operator fallback), and "backend":"mocker" is a
-            # valid target. optimization_target is Literal["throughput","latency","load","sla"]:
-            # "load" REQUIRES prefill/decode threshold keys or it raises at config validation,
-            # so we use "throughput" (the default). For target!="sla" the planner force-enables
-            # load scaling and disables throughput scaling — the backend-agnostic, load-driven
-            # autoscaling this lab wants (experiment B) without profiling data.
-            - --config
-            - >-
-              {"environment": "kubernetes", "backend": "mocker",
-              "optimization_target": "throughput", "enable_load_scaling": true,
-              "enable_throughput_scaling": false,
-              "load_adjustment_interval_seconds": 10}
-
-    # ---------------------------------------------------------------------------------
     # MockerWorker: the aggregated worker pool. Each replica does BOTH prefill and decode
-    # (no --disaggregation-mode). Operator scales this pool up/down under the planner.
+    # (no --disaggregation-mode).
+    #
+    # NOTE: no Planner in the aggregated topology. The planner's KubernetesConnector
+    # (environment=kubernetes) calls validate_deployment, which REQUIRES 'prefill' AND 'decode'
+    # components (the disaggregated split); with one unified worker pool it raises
+    # DeploymentValidationError and crash-loops. Experiment (B) autoscaling runs on
+    # fleet/disagg.yaml (ADR 0007). Diagnosed live on EKS 1.36, 2026-07-28.
     # ---------------------------------------------------------------------------------
     MockerWorker:
       componentType: worker
@@ -205,7 +146,7 @@ spec:
           value: "10"
       extraPodSpec:
         # Steer ONLY the mocker workers onto the Karpenter `workers` NodePool (ADR 0008),
-        # which is tainted dynamo-lab/workers=true:NoSchedule. Frontend/Planner stay on the
+        # which is tainted dynamo-lab/workers=true:NoSchedule. The Frontend stays on the
         # untainted system nodes (they carry no nodeSelector/toleration).
         # Verified v1.3.0: extraPodSpec inlines a corev1.PodSpec (operator common.go
         # ExtraPodSpec), so nodeSelector + tolerations are direct children here — no
@@ -220,8 +161,14 @@ spec:
           image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
           workingDir: /workspace
           ports:
+            # Named `system` (NOT `metrics`): the operator adds a startup probe
+            # `httpGet /live port=system` to worker components. With DYN_SYSTEM_PORT=8081 the
+            # system server serves BOTH /live and /metrics on 8081, so naming this port `system`
+            # lets the probe resolve. Otherwise kubelet errors `strconv.Atoi: parsing "system"`,
+            # the probe never passes, and the worker never becomes Ready. podmonitor-fleet.yaml
+            # scrapes the `system` port too. Diagnosed live on EKS 1.36, 2026-07-28.
             - containerPort: 8081
-              name: metrics
+              name: system
           command:
             - python3
             - -m

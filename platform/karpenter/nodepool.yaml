@@ -15,8 +15,10 @@ metadata:
 spec:
   template:
     metadata:
+      # kubelet REJECTS kubernetes.io/k8s.io-namespaced labels (incl. app.kubernetes.io/*) as
+      # --node-labels, so Karpenter-provisioned nodes would crash-loop and never join. Only the
+      # custom-namespace label goes on the node here. Diagnosed 2026-07-28.
       labels:
-        app.kubernetes.io/part-of: dynamo-lab
         dynamo-lab/node-pool: workers
     spec:
       # Taint worker nodes so ONLY pods that tolerate dynamo-lab/workers land here (ADR 0008).

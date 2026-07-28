@@ -72,9 +72,11 @@ module "eks" {
       max_size     = var.system_node_max_size
       desired_size = var.system_node_desired_size
 
+      # kubelet REJECTS kubernetes.io/k8s.io-namespaced labels (incl. app.kubernetes.io/*)
+      # passed via --node-labels — the node crash-loops on flag validation and never joins
+      # ("NodeCreationFailure"). Keep only custom-namespace labels here. Diagnosed 2026-07-28.
       labels = {
-        "app.kubernetes.io/part-of" = "dynamo-lab"
-        "dynamo-lab/node-pool"      = "system"
+        "dynamo-lab/node-pool" = "system"
       }
 
       tags = {
