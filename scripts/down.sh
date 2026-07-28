@@ -13,6 +13,47 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
+# EBS volumes backing the fleet/platform PVCs carry the cluster ownership tag. We use it to
+# (a) wait for ebs-csi to release them before the cluster is destroyed, and (b) sweep any that
+# still leak after destroy. Both guard "$0 idle": a detached-but-undeleted volume in `available`
+# state keeps billing.
+_cluster_volume_ids() {
+  aws ec2 describe-volumes --region "$REGION" \
+    --filters "Name=tag:kubernetes.io/cluster/${CLUSTER_NAME},Values=owned" \
+    --query 'Volumes[].VolumeId' --output text 2>/dev/null
+}
+
+# Bounded wait for the CSI driver to delete cluster EBS volumes, so `terraform destroy` does not
+# race the driver and orphan them. Best-effort: on timeout the post-destroy sweep catches any.
+_wait_ebs_released() {
+  local deadline=$((SECONDS + 240)) vols
+  log "waiting for ebs-csi to release cluster EBS volumes (up to 4m)..."
+  while :; do
+    vols="$(_cluster_volume_ids)"
+    [[ -z "$vols" ]] && { ok "cluster EBS volumes released"; return 0; }
+    ((SECONDS >= deadline)) && { warn "timed out waiting for EBS release — post-destroy sweep will handle stragglers"; return 0; }
+    sleep 10
+  done
+}
+
+# Safety net AFTER destroy: the CSI driver is gone, so a leftover cluster-tagged volume can only
+# be removed directly. A stray `available` volume is a billing tail that defeats "$0 idle".
+_sweep_orphan_ebs() {
+  local vols v
+  local -a orphans
+  vols="$(_cluster_volume_ids)"
+  if [[ -z "$vols" ]]; then
+    ok "no orphaned EBS volumes — idle cost is truly \$0"
+    return 0
+  fi
+  read -ra orphans <<<"$vols"
+  warn "orphaned EBS volume(s) survived destroy; deleting: ${vols}"
+  for v in "${orphans[@]}"; do
+    aws ec2 delete-volume --volume-id "$v" --region "$REGION" >/dev/null 2>&1 \
+      && ok "deleted ${v}" || warn "could not delete ${v} — remove it manually"
+  done
+}
+
 step "dynamo-lab DOWN — full teardown"
 
 # 1. Confirmation gate. This wraps an irreversible `terraform destroy -auto-approve`, so an
@@ -52,6 +93,11 @@ if aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" >/dev/null
   kubectl delete pvc --all -n "$NS_DYNAMO"     --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete pvc --all -n "$NS_MONITORING" --ignore-not-found >/dev/null 2>&1 || true
 
+  # 6b. Let the CSI driver finish DELETING the backing EBS volumes before we destroy the cluster
+  #     (and the driver). Without this, terraform destroy races the volume deletion and leaves
+  #     orphaned `available` volumes billing forever (observed: 3 leaked on 2026-07-28).
+  _wait_ebs_released
+
   ok "in-cluster cleanup attempted"
 else
   warn "cluster ${CLUSTER_NAME} not reachable — skipping in-cluster cleanup, proceeding to terraform destroy"
@@ -59,6 +105,11 @@ fi
 
 # 7. The authoritative teardown: destroy terraform/main.
 "$SCRIPTS_DIR/infra.sh" down
+
+# 8. Sweep any EBS volumes that outlived the destroy (see _sweep_orphan_ebs). Uses aws only, so it
+#    runs even if the cluster was already gone and the in-cluster cleanup above was skipped.
+require_cmd aws
+_sweep_orphan_ebs
 
 step "dynamo-lab is DOWN"
 ok "idle cost is \$0 (state bucket from bootstrap is intentionally retained)"

@@ -179,6 +179,14 @@ item: components log an OTEL *log*-export error to `127.0.0.1:4317` (the OTLP-lo
 the lab ships logs via JSONL→promtail→Loki, so it's cosmetic — traces use the configured Tempo
 endpoint).
 
+**Teardown hardening.** The first `make down` destroyed all 91 resources cleanly but left **3
+orphaned EBS volumes** in `available` state (the Prometheus / etcd-1 / nats-1 PVCs): `down.sh`
+deleted the PVCs but did not wait for ebs-csi to release the volumes before `terraform destroy` tore
+the driver down, so they leaked — a billing tail that defeats "$0 idle". Hardened `down.sh`: it now
+waits up to 4m for the CSI driver to release cluster-tagged volumes before destroy, then sweeps +
+deletes any that survive afterward. Re-verified `$0` idle (no EKS / EC2 / NAT / EBS remain; the
+bootstrap state bucket is intentionally retained).
+
 ## Outstanding — after the first live `make up`
 
 Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works
