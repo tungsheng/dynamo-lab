@@ -40,7 +40,8 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
   [0009](docs/adr/0009-track-g-grove-gang-scheduling.md)) to observe Dynamo's Grove gang
   scheduling, multi-level autoscaling, and topology-aware placement with the mocker — no GPUs,
   no change to the A/B/C roadmap or the default `make up`. Planning + ADR landed; platform
-  scaffolding in progress. (Track N / NIXL data plane deferred — it needs real GPUs.)
+  scaffolding landed (`platform/grove/`); operator/scheduler wiring next. (Track N / NIXL
+  data plane deferred — it needs real GPUs.)
 
 ## What's built
 
@@ -235,8 +236,10 @@ real-cost experiment that breaks `$0` idle. It gets its own ADR + GPU node class
 
 **Work items** (the change surface; additive — nothing here reorders the roadmap above):
 
-1. [ ] **`platform/grove/` scaffolding** — Grove operator + KAI-Scheduler install values +
-   README, `# VERIFY:`'d against a pinned Grove/KAI release. *(in progress)*
+1. [x] **`platform/grove/` scaffolding** — Grove operator + KAI-Scheduler install values +
+   README, `# VERIFY:`'d against a pinned Grove/KAI release. *(done — `platform/grove/`
+   README + `values-grove-operator.yaml` + `values-kai-scheduler.yaml`; yamllint clean. The
+   operator-enablement contract and chart/version/API pins are the open `# VERIFY:`s.)*
 2. [ ] **`platform.sh` wiring** — an optional `install_grove()` gated behind `GROVE=1`
    (default off) so the default bring-up is untouched.
 3. [ ] **`fleet/grove-scale.yaml`** — a mocker DGD deployed via Grove with a

@@ -1,0 +1,18 @@
+# values-kai-scheduler.yaml
+# KAI-Scheduler — the gang scheduler Grove relies on to place a PodGang all-or-nothing. NVIDIA's
+# scheduler (open-sourced from Run:ai). Track G only. See platform/grove/README.md and ADR
+# docs/adr/0009-track-g-grove-gang-scheduling.md.
+#
+# Chart: VERIFY — pin the KAI-Scheduler Helm repo + version.
+#   e.g. helm upgrade --install kai-scheduler <kai-repo>/kai-scheduler --version <x.y.z>
+# Namespace: kai-scheduler  (VERIFY the scheduler's expected namespace)
+#
+# The keys below are the install *intent*, not confirmed key paths — VERIFY every one against
+# the pinned KAI chart's values schema.
+
+# The mocker fleet is CPU-only, so KAI must schedule CPU gangs with no GPU/binpack assumptions.
+# Track G's whole point is watching gang formation, so gang scheduling must be on.
+# VERIFY: the key path for gang-scheduling enablement, and whether CPU-only needs any
+# resource-plan / queue config for the dynamo namespace.
+gangScheduling:
+  enabled: true

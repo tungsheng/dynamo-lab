@@ -1,0 +1,23 @@
+# values-grove-operator.yaml
+# Grove — Dynamo's Kubernetes gang-scheduling / multi-component orchestration operator. Groups a
+# fleet's components into a gang (PodClique / PodCliqueScalingGroup / PodGangSet) that schedules
+# all-or-nothing and scales the prefill+decode unit as one. Track G only; the default `make up`
+# never installs this. See platform/grove/README.md and ADR
+# docs/adr/0009-track-g-grove-gang-scheduling.md.
+#
+# Chart: VERIFY — pin the Grove operator Helm repo + version.
+#   e.g. helm upgrade --install grove <grove-repo>/grove-operator --version <x.y.z>
+# Namespace: grove-system  (VERIFY the operator's expected namespace)
+#
+# The keys below are the install *intent*, not confirmed key paths — VERIFY every one against
+# the pinned Grove chart's values schema before wiring install_grove() (work item 2).
+
+# Grove defers pod placement to a gang scheduler; point it at KAI-Scheduler.
+# VERIFY: key path + the scheduler name KAI registers as (kai-scheduler vs kai).
+scheduler:
+  name: kai-scheduler
+
+# VERIFY: whether Grove CRDs ship inside this chart or install separately (like the Dynamo
+# operator's crd-apply init container). If separate, install_grove() must apply them first.
+crds:
+  install: true
