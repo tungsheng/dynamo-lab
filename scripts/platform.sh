@@ -254,13 +254,17 @@ platform_up() {
   install_storageclass
   add_repos
   create_namespaces
+  # Observability MUST come first: kube-prometheus-stack installs the Prometheus Operator CRDs
+  # (PodMonitor / ServiceMonitor / monitoring.coreos.com). etcd, NATS, the operator, and
+  # chaos-mesh below all create PodMonitors/ServiceMonitors, which fail to apply ("no matches
+  # for kind PodMonitor") if those CRDs don't exist yet. Diagnosed live 2026-07-28.
+  install_observability
   install_coordination
   install_operator
-  install_observability
   install_chaos_mesh
   install_karpenter
   step "Platform up complete"
-  ok "coordination + operator + observability + chaos-mesh + karpenter ready"
+  ok "observability + coordination + operator + chaos-mesh + karpenter ready"
 }
 
 platform_down() {

@@ -116,11 +116,16 @@ spec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
           ports:
-            # Named `metrics` port so podmonitor-fleet.yaml can scrape the Planner too.
-            # Verified v1.3.0: the planner's Prometheus metrics bind PLANNER_PROMETHEUS_PORT
-            # (set to 8081 in the envs above) so this port is live.
+            # Planner Prometheus metrics bind PLANNER_PROMETHEUS_PORT=8081 (env above);
+            # podmonitor-fleet.yaml scrapes this `metrics` port.
             - containerPort: 8081
               name: metrics
+            # The operator also adds a `httpGet /live port=system` probe to the planner, whose
+            # system/health server is on DYN_SYSTEM_PORT (operator stock default 9090, distinct
+            # from the metrics port above). Expose `system` so the probe resolves.
+            # UNVALIDATED — confirm the planner serves /live on 9090 during a disagg bring-up.
+            - containerPort: 9090
+              name: system
           command:
             - python3
             - -m
@@ -188,8 +193,12 @@ spec:
           image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
           workingDir: /workspace
           ports:
+            # Named `system` (not `metrics`): the operator's `httpGet /live port=system` startup
+            # probe on worker components needs this name to resolve (with DYN_SYSTEM_PORT=8081 the
+            # system server serves both /live and /metrics on 8081). podmonitor-fleet.yaml scrapes
+            # `system` too. Same fix as fleet/agg.yaml — verify on a disagg bring-up. 2026-07-28.
             - containerPort: 8081
-              name: metrics
+              name: system
           command:
             - python3
             - -m
@@ -262,8 +271,12 @@ spec:
           image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
           workingDir: /workspace
           ports:
+            # Named `system` (not `metrics`): the operator's `httpGet /live port=system` startup
+            # probe on worker components needs this name to resolve (with DYN_SYSTEM_PORT=8081 the
+            # system server serves both /live and /metrics on 8081). podmonitor-fleet.yaml scrapes
+            # `system` too. Same fix as fleet/agg.yaml — verify on a disagg bring-up. 2026-07-28.
             - containerPort: 8081
-              name: metrics
+              name: system
           command:
             - python3
             - -m
