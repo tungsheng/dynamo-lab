@@ -141,7 +141,8 @@ spec:
               {"environment": "kubernetes", "backend": "mocker",
               "optimization_target": "throughput", "enable_load_scaling": true,
               "enable_throughput_scaling": false,
-              "load_adjustment_interval_seconds": 10}
+              "load_adjustment_interval_seconds": 10,
+              "prefill_engine_num_gpu": 1, "decode_engine_num_gpu": 1}
 
     # ---------------------------------------------------------------------------------
     # MockerPrefillWorker: prefill-only pool (--disaggregation-mode prefill).

@@ -1,6 +1,6 @@
 # Progress
 
-_Last updated: 2026-07-27_
+_Last updated: 2026-07-28_
 
 Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 [CONTEXT.md](CONTEXT.md) for vocabulary, and [docs/adr/](docs/adr/) for the design decisions.
@@ -22,10 +22,20 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 - [x] **Terraform plan validated (read-only)** — both roots plan clean against the real account
   (209468748526, us-west-2): bootstrap 5 to add, main **91 to add / 0 change / 0 destroy**, no
   warnings. Nothing applied. Infra version markers resolved in the same pass (Pass 5 below).
-- [ ] **First `make up` against AWS** — NOT yet run. Nothing has been applied to a real account.
-- [ ] **Resolve remaining `# VERIFY` markers** (66 left: platform / observability / coordination /
-  chaos / load / scripts). The **Terraform/infra layer is now fully resolved.**
-- [ ] **First end-to-end experiment** — spike + chaos on the disaggregated fleet.
+- [x] **Platform version hardening (Pass 6)** — bumped the observability/coordination/chaos chart
+  pins to latest (kube-prometheus-stack 87, Loki 7, NATS 2, Tempo, promtail, chaos-mesh 2.8); held
+  bitnami/etcd 10.7.1 with a verified `bitnamilegacy` image; all render-verified vs K8s 1.36 (PR #9).
+- [x] **First `make up` against AWS — DONE & LIVE-VALIDATED (2026-07-28).** Full bring-up on
+  **EKS 1.36**: bootstrap → infra (VPC / EKS / Karpenter) → platform (coordination, operator,
+  observability, chaos-mesh) → fleet. Surfaced **5 live-only bugs**, all fixed (Pass 7 below).
+- [x] **First end-to-end experiment (partial).** k6 **spike** ramped to 300 VUs on the agg fleet —
+  7,596 iterations, **0 errors**, worker stable (experiment C). **Disaggregated** fleet validated
+  end-to-end (frontend + prefill + decode + planner all Ready, `/health` 200) with the **planner
+  autoscaling loop running live** (experiment B). Karpenter scaled worker nodes on demand (ADR 0008).
+- [ ] **Chaos experiment** — Chaos Mesh fault injection against the live fleet (experiment A) — not
+  yet exercised.
+- [ ] **Resolve remaining `# VERIFY` markers** (observability / coordination / chaos / load /
+  scripts). Terraform/infra fully resolved; the fleet layer is now **live-validated**.
 
 ## What's built
 
@@ -132,16 +142,54 @@ release/compat docs) and bumped the aged ones, then confirmed both Terraform roo
 The plan was run with a temporary local-backend override (deleted after) so no S3 state bucket was
 created — a true read-only validation. `terraform fmt`/`validate` still pass.
 
-## Outstanding — before the first `make up`
+**Pass 6 — platform chart-version hardening** (render-verified; PR #9). Bumped the
+observability/coordination/chaos Helm pins and render-verified each with `helm template` against
+K8s 1.36 using the lab's own values: kube-prometheus-stack 66→87, grafana/loki 6→7, nats/nats 1→2,
+tempo 1.14→1.24, promtail 6.16→6.17, chaos-mesh 2.6→2.8. Held bitnami/etcd at 10.7.1 (newer charts
+pin an etcd tag absent from the frozen `bitnamilegacy` archive) and verified the pinned
+`bitnamilegacy/etcd:3.5.21-debian-12-r5` image is present + anonymously pullable.
 
-Never applied to AWS. The fleet manifests + Dynamo operator install are now verified against
-v1.3.0 (Pass 4); the remaining `grep -rn VERIFY .` markers (80) live in the other layers:
+**Pass 7 — first live `make up` on EKS 1.36 + the 5 bugs it surfaced** (2026-07-28; PR #10 + a
+disagg follow-up). The full bring-up ran end to end and is live-validated. Five **live-only** bugs
+(none catchable by static / `terraform plan` / `helm template` checks) were found and fixed:
 
-1. **Platform chart versions** — etcd, NATS, kube-prometheus-stack, Loki, Tempo, promtail, and
-   chaos-mesh chart versions (`scripts/platform.sh`), plus the bitnami image-repo relocation.
-2. **Live-only fleet checks** — the component-type pod labels the operator actually stamps (the
-   disagg chaos selectors assume the alpha-era `worker` + `sub-component-type` pairing), and the
-   `metricsService`/PodMonitor scrape once a cluster exists.
+- **Kubelet-rejected node label (live-proven).** `app.kubernetes.io/part-of` is in the kubernetes.io
+  namespace, which kubelet refuses via `--node-labels` — the kubelet crash-looped on flag validation
+  and nodes never joined (`NodeCreationFailure`). A ~2-hour node-join hunt traced to this; it was NOT
+  the EKS version or the endpoint lockdown (a downgrade would have failed identically). Removed from
+  both node-label sites (system node group + Karpenter NodePool); kept `dynamo-lab/node-pool`.
+  Root-caused by reading the failing kubelet journal on a probe node via SSM.
+- **PodMonitor CRD ordering (live-proven).** `platform.sh` installed etcd/NATS (which create
+  PodMonitors) before kube-prometheus-stack installs the PodMonitor CRD. Reordered — observability
+  first.
+- **Fleet probe port name (live-validated).** The operator adds a `httpGet /live port=system`
+  startup probe to worker/planner, but manifests named the `DYN_SYSTEM_PORT` port `metrics` →
+  `strconv.Atoi: parsing "system"` → pods never Ready. Named the port `system`; PodMonitor scrapes
+  both `system` + `metrics`. Confirmed on agg + disagg workers.
+- **Planner ⇢ aggregated incompatibility (live-validated).** The planner's KubernetesConnector
+  requires `prefill`+`decode` components, so it crash-loops in the aggregated topology. Removed the
+  planner from `agg.yaml` (it belongs in disagg, ADR 0007); agg DGD now reconciles to READY.
+- **Disagg planner GPU-count config (live-validated).** Found while validating disagg: the planner's
+  budget init requires `prefill_engine_num_gpu` / `decode_engine_num_gpu`. Added nominal `1` each
+  (mocker) → the planner starts and runs its load-scaling loop.
+
+The endpoint-allowlist experiment tried while chasing bug 1 is reverted — worker nodes reach the API
+via the **private** endpoint (node DNS resolves to the private ENIs; `/healthz` 200). Minor open
+item: components log an OTEL *log*-export error to `127.0.0.1:4317` (the OTLP-logs exporter default;
+the lab ships logs via JSONL→promtail→Loki, so it's cosmetic — traces use the configured Tempo
+endpoint).
+
+## Outstanding — after the first live `make up`
+
+Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works
+end-to-end; what remains:
+
+1. **Platform chart versions — DONE (Pass 6).** All observability/coordination/chaos chart pins
+   bumped + render-verified; bitnami/etcd held at 10.7.1 with a verified `bitnamilegacy` image.
+2. **Live-only fleet checks — largely DONE (Pass 7).** Fleet component-type labels, the fixed
+   probe/port wiring, and the PodMonitor scrape are confirmed live on agg + disagg. Still to
+   exercise: the **chaos** selectors + annotation bridge against the live fleet (experiment A), and
+   the **v1alpha1 → v1beta1** DGD apiVersion bump (the operator logs a deprecation warning on apply).
 3. **Infra versions — RESOLVED (Pass 5).** EKS control-plane `1.31` → **`1.36`** (1.31 had aged
    into paid *extended* support; 1.36 is the latest with standard support to 2027-08-02). Karpenter
    helm chart `1.0.8` → **`1.14.0`** (latest; supports K8s 1.36, needs ≥1.13). AL2023 AMI alias
@@ -160,8 +208,9 @@ v1.3.0 (Pass 4); the remaining `grep -rn VERIFY .` markers (80) live in the othe
 
 ## Known limitations
 
-- Never deployed. The fleet + operator specifics are verified against v1.3.0 (docs/source, not
-  live); the observability/coordination/chaos/infra layers are still best-effort, `# VERIFY`-tagged.
-- Trace→logs correlation (Tempo→Loki `service_name`) is PLAUSIBLE-only until verified live.
+- Deployed + validated on EKS 1.36 (agg + disagg fleets serve; planner autoscaling loop runs; k6
+  spike to 300 VUs with 0 errors). Chaos (experiment A) is the one headline experiment not yet run.
+- Trace→logs correlation (Tempo→Loki `service_name`) is PLAUSIBLE-only until verified live; note the
+  OTLP-logs exporter also logs a cosmetic `127.0.0.1:4317` connection error (logs ship via promtail).
 - The chaos annotation bridge installs its Python deps at pod start (no custom image); fine for
   a lab, bake an image if you want it hardened.
