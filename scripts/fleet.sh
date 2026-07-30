@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/fleet.sh  up|down  [agg|disagg]
+# scripts/fleet.sh  up|down  [agg|disagg|grove-scale]
 # Deploy / remove just the Dynamo fleet (a single DynamoGraphDeployment) on a
 # live cluster — the fast inner loop. Default profile: agg.
 #
@@ -14,7 +14,8 @@ PROFILE="${2:-${PROFILE:-agg}}"
 
 case "$PROFILE" in
   agg|disagg) ;;
-  *) die "unknown fleet profile '${PROFILE}' (expected agg|disagg)" ;;
+  grove-scale) ;;   # Track G: disagg-derived DGD deployed via Grove (ADR 0009) — needs GROVE=1 platform
+  *) die "unknown fleet profile '${PROFILE}' (expected agg|disagg|grove-scale)" ;;
 esac
 
 MANIFEST="${FLEET_DIR}/${PROFILE}.yaml"

@@ -1,0 +1,315 @@
+# dynamo-lab :: fleet :: TRACK G — Grove gang-scheduling scale profile  (docs/adr/0009)
+#
+# A DERIVED COPY of fleet/disagg.yaml (keep the two in sync — same components, envs, ports,
+# images, worker node-steering, and mocker args). Only THREE deltas make this the Track G
+# profile, all GPU-free — see platform/grove/README.md + ADR 0009:
+#   1. metadata.name is `mocker-grove` (so it can coexist with mocker-disagg) and carries the
+#      `dynamo-lab/track: grove` label.
+#   2. Two annotations wire the operator's Grove path (Grove is selected by default once
+#      global.grove.enabled is set at operator install — see platform.sh install_grove/GROVE=1):
+#        - nvidia.com/enable-grove: makes Track G's intent explicit (default is already Grove;
+#          set "false" to fall back to LWS).
+#        - nvidia.com/kai-scheduler-queue: RESOLVES THE QUEUE-NAME GOTCHA. The operator's default
+#          is `dynamo`, but KAI only auto-creates a leaf queue named `default-queue`; a pod
+#          pointing at a missing queue never schedules. We point at `default-queue` (option (b)
+#          in platform/grove/README.md) so no extra KAI Queue CRD is needed.
+#   3. The prefill/decode worker pools default to replicas: 3 (was 1) — the gang-pressure knob.
+#      Grove schedules the whole PodCliqueSet all-or-nothing, so raise these (or shrink the
+#      Karpenter `workers` pool) to observe gang-blocked `Pending` and multi-level autoscaling.
+#
+# The frontend Service is `mocker-grove-frontend:8000`; to load it, override FRONTEND_URL (the
+# TOPOLOGY=agg|disagg load selector does not know this profile). Grove/KAI must be installed and
+# enabled first: `GROVE=1 make platform-up` or `make track-g-up`.
+#
+# Verified against ai-dynamo/dynamo v1.3.0 (as fleet/disagg.yaml; sources in fleet/README.md).
+# VERIFY (live): confirm the operator renders this DGD as a Grove PodCliqueSet and the queue name
+# resolves — render/queue checks in platform/grove/README.md.
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: mocker-grove
+  namespace: dynamo
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/component: fleet
+    dynamo-lab/topology: disaggregated
+    dynamo-lab/track: grove
+  annotations:
+    # Verified v1.3.0: opts into legacy etcd/KV-store discovery (see agg.yaml header).
+    nvidia.com/dynamo-discovery-backend: etcd
+    # Track G (ADR 0009). Grove is the operator default once global.grove.enabled is set; "true"
+    # states the intent. The queue MUST be one KAI actually has — `default-queue` is auto-created,
+    # whereas the operator default `dynamo` is not (the queue-name gotcha). See platform/grove/.
+    nvidia.com/enable-grove: "true"
+    nvidia.com/kai-scheduler-queue: default-queue
+spec:
+  services:
+    # ---------------------------------------------------------------------------------
+    # Frontend: OpenAI-compatible HTTP API on :8000, KV-aware router.
+    # ---------------------------------------------------------------------------------
+    Frontend:
+      componentType: frontend
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      envs:
+        - name: DYN_ROUTER_MODE # KV-aware routing ON (needs NATS event plane)
+          value: kv
+        # Bind the unified frontend metrics surface on :8081 so the `metrics` port binds.
+        # Verified v1.3.0: DYN_SYSTEM_PORT must be set on the frontend too, not just workers
+        # (docs/observability/README.md); without it the 8081 scrape target is dead.
+        - name: DYN_SYSTEM_PORT
+          value: "8081"
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-frontend
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
+          ports:
+            - containerPort: 8000
+              name: http
+            # Named `metrics` port so podmonitor-fleet.yaml (which scrapes port name `metrics`)
+            # can reach the Frontend, not just the workers. DYN_SYSTEM_PORT=8081 is set in the
+            # Frontend envs above so this endpoint actually binds (verified v1.3.0).
+            - containerPort: 8081
+              name: metrics
+
+    # ---------------------------------------------------------------------------------
+    # Planner: autoscaler (experiment B). In disagg it can scale prefill and decode pools
+    # independently. KubernetesConnector via "environment":"kubernetes"; VirtualConnector
+    # ("environment":"virtual") is the fallback for local/dry-run.
+    # ---------------------------------------------------------------------------------
+    Planner:
+      componentType: planner
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      envs:
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        # Bind the planner's Prometheus metrics on :8081 to match the `metrics` port below.
+        # Verified v1.3.0: the planner serves metrics on PLANNER_PROMETHEUS_PORT (default 9085,
+        # component_planner.go), not DYN_SYSTEM_PORT — override to 8081 or the scrape is dead.
+        - name: PLANNER_PROMETHEUS_PORT
+          value: "8081"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-planner
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
+          ports:
+            # Planner Prometheus metrics bind PLANNER_PROMETHEUS_PORT=8081 (env above);
+            # podmonitor-fleet.yaml scrapes this `metrics` port.
+            - containerPort: 8081
+              name: metrics
+            # The operator also adds a `httpGet /live port=system` probe to the planner, whose
+            # system/health server is on DYN_SYSTEM_PORT (operator stock default 9090, distinct
+            # from the metrics port above). Expose `system` so the probe resolves.
+            # UNVALIDATED — confirm the planner serves /live on 9090 during a disagg bring-up.
+            - containerPort: 9090
+              name: system
+          command:
+            - python3
+            - -m
+            - dynamo.planner
+          args:
+            # Verified v1.3.0 (planner_config.py): optimization_target "load" REQUIRES prefill/
+            # decode threshold keys or it raises at config validation, so we use "throughput"
+            # (the default). For target!="sla" the planner force-enables load scaling and
+            # disables throughput scaling — backend-agnostic, load-driven autoscaling (experiment
+            # B) with no profiling data. "backend":"mocker" is a valid target (see agg.yaml).
+            - --config
+            - >-
+              {"environment": "kubernetes", "backend": "mocker",
+              "optimization_target": "throughput", "enable_load_scaling": true,
+              "enable_throughput_scaling": false,
+              "load_adjustment_interval_seconds": 10,
+              "prefill_engine_num_gpu": 1, "decode_engine_num_gpu": 1}
+
+    # ---------------------------------------------------------------------------------
+    # MockerPrefillWorker: prefill-only pool (--disaggregation-mode prefill).
+    # ---------------------------------------------------------------------------------
+    MockerPrefillWorker:
+      componentType: worker
+      subComponentType: prefill
+      replicas: 3 # Track G gang-pressure knob (was 1 in disagg) — raise to gang-block / force node scaling
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      envs:
+        - name: DYN_SYSTEM_PORT
+          value: "8081"
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-mocker-prefill
+        - name: DYN_MOCKER_SPEEDUP_RATIO
+          value: "10"
+      extraPodSpec:
+        # Steer ONLY the mocker workers onto the Karpenter `workers` NodePool (ADR 0008),
+        # which is tainted dynamo-lab/workers=true:NoSchedule. Frontend/Planner stay on the
+        # untainted system nodes (they carry no nodeSelector/toleration).
+        # Verified v1.3.0: extraPodSpec inlines a corev1.PodSpec (operator common.go
+        # ExtraPodSpec), so nodeSelector + tolerations are direct children here — no
+        # podSpec/podOverride wrapper; only `mainContainer` sits alongside the inlined fields.
+        nodeSelector:
+          dynamo-lab/node-pool: workers
+        tolerations:
+          - key: dynamo-lab/workers
+            value: "true"
+            effect: NoSchedule
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
+          workingDir: /workspace
+          ports:
+            # Named `system` (not `metrics`): the operator's `httpGet /live port=system` startup
+            # probe on worker components needs this name to resolve (with DYN_SYSTEM_PORT=8081 the
+            # system server serves both /live and /metrics on 8081). podmonitor-fleet.yaml scrapes
+            # `system` too. Same fix as fleet/agg.yaml — verify on a disagg bring-up. 2026-07-28.
+            - containerPort: 8081
+              name: system
+          command:
+            - python3
+            - -m
+            - dynamo.mocker
+          args:
+            - --model-path
+            - Qwen/Qwen3-0.6B
+            - --model-name
+            - Qwen/Qwen3-0.6B
+            # Verified v1.3.0: --num-workers is a valid mocker flag (default 1; upstream scales
+            # via pod replicas instead), so "1" here is a harmless no-op kept per the shared spec.
+            - --num-workers
+            - "1"
+            - --speedup-ratio
+            - "$(DYN_MOCKER_SPEEDUP_RATIO)"
+            - --disaggregation-mode
+            - prefill
+            # Verified v1.3.0: --planner-profile-data is OPTIONAL (default None -> mocker uses
+            # hardcoded polynomials). Kept to match upstream; H200_TP1P_TP1D ships at v1.3.0.
+            - --planner-profile-data
+            - /workspace/components/src/dynamo/planner/tests/data/profiling_results/H200_TP1P_TP1D
+
+    # ---------------------------------------------------------------------------------
+    # MockerDecodeWorker: decode-only pool (--disaggregation-mode decode).
+    # ---------------------------------------------------------------------------------
+    MockerDecodeWorker:
+      componentType: worker
+      subComponentType: decode
+      replicas: 3 # Track G gang-pressure knob (was 1 in disagg) — raise to gang-block / force node scaling
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      envs:
+        - name: DYN_SYSTEM_PORT
+          value: "8081"
+        - name: ETCD_ENDPOINTS
+          value: http://etcd.dynamo.svc.cluster.local:2379
+        - name: NATS_SERVER
+          value: nats://nats.dynamo.svc.cluster.local:4222
+        - name: OTEL_EXPORT_ENABLED
+          value: "true"
+        - name: DYN_LOGGING_JSONL
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://tempo.monitoring.svc.cluster.local:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_SERVICE_NAME
+          value: dynamo-mocker-decode
+        - name: DYN_MOCKER_SPEEDUP_RATIO
+          value: "10"
+      extraPodSpec:
+        # Steer ONLY the mocker workers onto the Karpenter `workers` NodePool (ADR 0008),
+        # which is tainted dynamo-lab/workers=true:NoSchedule. Frontend/Planner stay on the
+        # untainted system nodes (they carry no nodeSelector/toleration).
+        # Verified v1.3.0: extraPodSpec inlines a corev1.PodSpec (operator common.go
+        # ExtraPodSpec), so nodeSelector + tolerations are direct children here — no
+        # podSpec/podOverride wrapper; only `mainContainer` sits alongside the inlined fields.
+        nodeSelector:
+          dynamo-lab/node-pool: workers
+        tolerations:
+          - key: dynamo-lab/workers
+            value: "true"
+            effect: NoSchedule
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION} # verified v1.3.0: dynamo-planner ships the mocker wheel + runs CPU-only
+          workingDir: /workspace
+          ports:
+            # Named `system` (not `metrics`): the operator's `httpGet /live port=system` startup
+            # probe on worker components needs this name to resolve (with DYN_SYSTEM_PORT=8081 the
+            # system server serves both /live and /metrics on 8081). podmonitor-fleet.yaml scrapes
+            # `system` too. Same fix as fleet/agg.yaml — verify on a disagg bring-up. 2026-07-28.
+            - containerPort: 8081
+              name: system
+          command:
+            - python3
+            - -m
+            - dynamo.mocker
+          args:
+            - --model-path
+            - Qwen/Qwen3-0.6B
+            - --model-name
+            - Qwen/Qwen3-0.6B
+            # Verified v1.3.0: --num-workers is a valid mocker flag (default 1; upstream scales
+            # via pod replicas instead), so "1" here is a harmless no-op kept per the shared spec.
+            - --num-workers
+            - "1"
+            - --speedup-ratio
+            - "$(DYN_MOCKER_SPEEDUP_RATIO)"
+            - --disaggregation-mode
+            - decode
+            # Verified v1.3.0: --planner-profile-data is OPTIONAL (default None -> mocker uses
+            # hardcoded polynomials). Kept to match upstream; H200_TP1P_TP1D ships at v1.3.0.
+            - --planner-profile-data
+            - /workspace/components/src/dynamo/planner/tests/data/profiling_results/H200_TP1P_TP1D
