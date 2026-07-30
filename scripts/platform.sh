@@ -361,5 +361,24 @@ platform_down() {
 case "$ACTION" in
   up)   platform_up ;;
   down) platform_down ;;
-  *)    die "usage: platform.sh up|down" ;;
+  # Track G (opt-in): add/remove Grove + KAI on an ALREADY-RUNNING base platform, without
+  # touching observability/coordination/chaos/karpenter. `make track-g-up`/`track-g-down` wrap
+  # these with the grove-scale fleet overlay. Enabling flips the operator to the Grove path.
+  grove-up)
+    GROVE=1
+    ensure_kubeconfig
+    install_grove
+    install_operator   # re-render the operator WITH global.grove.enabled (grove_operator_flags)
+    step "Track G platform ready"
+    ok "grove + kai installed; operator integrated — deploy the fleet with PROFILE=grove-scale"
+    ;;
+  grove-down)
+    GROVE=0
+    ensure_kubeconfig
+    install_operator   # re-render the operator WITHOUT grove flags (disables the integration)
+    grove_down         # uninstall the KAI + Grove controllers (best-effort)
+    step "Track G platform removed"
+    ok "operator reverted to the default path; grove + kai uninstalled"
+    ;;
+  *)    die "usage: platform.sh up|down|grove-up|grove-down" ;;
 esac
