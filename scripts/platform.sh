@@ -60,6 +60,17 @@ PROMTAIL_VERSION="${PROMTAIL_VERSION:-6.17.1}" # grafana/promtail (was 6.16.6; p
 # Chaos Mesh.
 CHAOS_VERSION="${CHAOS_VERSION:-2.8.3}"       # chaos-mesh (was 2.6.5); latest, render-verified on K8s 1.36. 2026-07-27
 
+# Track G — Grove + KAI-Scheduler (OPT-IN; installed only when GROVE=1). Both are OCI charts, so
+# no `helm repo add`. Pins verified vs the Dynamo v1.3.0 compat matrix (platform/grove/README.md,
+# ADR docs/adr/0009-track-g-grove-gang-scheduling.md): Grove >= v0.1.0-alpha.11 for
+# dynamo-platform 1.3.x; KAI >= v0.13.4 (>= v0.15.2 enables topology-aware placement).
+# VERIFY (live): render both charts with `helm template` on K8s 1.36 before relying on them.
+GROVE="${GROVE:-0}"
+GROVE_CHART="${GROVE_CHART:-oci://ghcr.io/ai-dynamo/grove/grove-charts}"
+GROVE_VERSION="${GROVE_VERSION:-v0.1.0-alpha.11}"
+KAI_CHART="${KAI_CHART:-oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler}"
+KAI_VERSION="${KAI_VERSION:-v0.15.2}"
+
 # NOTE: the Karpenter controller chart version is NOT pinned here — Terraform owns the
 # controller helm_release (terraform/main/karpenter.tf, chart 1.0.8). This script only
 # applies the NodePool + EC2NodeClass.
@@ -139,6 +150,45 @@ install_coordination() {
   ok "nats installed"
 }
 
+# --- Grove + KAI-Scheduler (Track G, opt-in) ------------------------------
+# Installed ONLY when GROVE=1 (default off), so the standard bring-up is byte-identical to today.
+# Grove is Dynamo's gang-scheduling / multi-component orchestration operator; KAI is the gang
+# scheduler it relies on. Both are OCI charts (CRDs ship inside the Grove chart). install_operator()
+# additionally sets global.grove.enabled + global.kai-scheduler.enabled when GROVE=1, after which
+# the operator renders DGDs as Grove PodCliqueSets. See platform/grove/README.md + ADR 0009.
+install_grove() {
+  step "Track G: Grove operator + KAI-Scheduler (opt-in, GROVE=1)"
+
+  # shellcheck disable=SC2046
+  helm upgrade --install "$REL_GROVE" "$GROVE_CHART" \
+    --version "$GROVE_VERSION" -n "$NS_GROVE" --create-namespace \
+    $(values_args "$PLATFORM_DIR/grove/values-grove-operator.yaml") \
+    --wait --timeout "$HELM_WAIT_TIMEOUT"
+  ok "grove operator installed (${GROVE_VERSION})"
+
+  # shellcheck disable=SC2046
+  helm upgrade --install "$REL_KAI" "$KAI_CHART" \
+    --version "$KAI_VERSION" -n "$NS_KAI" --create-namespace \
+    $(values_args "$PLATFORM_DIR/grove/values-kai-scheduler.yaml") \
+    --wait --timeout "$HELM_WAIT_TIMEOUT"
+  ok "kai-scheduler installed (${KAI_VERSION})"
+}
+
+# grove_operator_flags — echo the extra operator --set flags that turn on Grove/KAI integration
+# when GROVE=1, and nothing otherwise. Mirrors the values_args idiom (word-split into the helm
+# command under the SC2046 disable), so the operator install is unchanged when GROVE=0.
+grove_operator_flags() {
+  [[ "$GROVE" == "1" ]] || return 0
+  printf -- '--set global.grove.enabled=true --set global.kai-scheduler.enabled=true'
+}
+
+# grove_down — best-effort removal of the Track G controllers. No-op when never installed
+# (helm_uninstall guards on `helm status`), so it is safe to call on every platform teardown.
+grove_down() {
+  helm_uninstall "$REL_KAI" "$NS_KAI"
+  helm_uninstall "$REL_GROVE" "$NS_GROVE"
+}
+
 # --- Dynamo operator ------------------------------------------------------
 install_operator() {
   step "Dynamo operator + CRDs (ns ${NS_DYNAMO_SYSTEM})"
@@ -146,9 +196,12 @@ install_operator() {
   # Verified v1.3.0: install only the dynamo-platform chart. The operator image's crd-apply
   # init container applies the DynamoGraphDeployment CRDs (dynamo-operator.upgradeCRD defaults
   # to true), so there is no separate dynamo-crds chart to install first.
+  # Track G: grove_operator_flags adds global.grove.enabled + global.kai-scheduler.enabled when
+  # GROVE=1 (empty otherwise — default install unchanged).
   # shellcheck disable=SC2046
   helm upgrade --install "$REL_DYNAMO_OPERATOR" "$DYNAMO_OPERATOR_CHART" \
     --version "$DYNAMO_PLATFORM_VERSION" -n "$NS_DYNAMO_SYSTEM" \
+    $(grove_operator_flags) \
     $(values_args "$PLATFORM_DIR/operator/values-dynamo-platform.yaml") \
     --wait --timeout "$HELM_WAIT_TIMEOUT"
   ok "dynamo operator installed"
@@ -260,11 +313,19 @@ platform_up() {
   # for kind PodMonitor") if those CRDs don't exist yet. Diagnosed live 2026-07-28.
   install_observability
   install_coordination
+  # Track G (opt-in): install Grove + KAI-Scheduler BEFORE the operator, so install_operator can
+  # integrate with them (it sets global.grove.enabled when GROVE=1). No-op unless GROVE=1, so the
+  # default bring-up is unchanged.
+  if [[ "$GROVE" == "1" ]]; then install_grove; fi
   install_operator
   install_chaos_mesh
   install_karpenter
   step "Platform up complete"
-  ok "observability + coordination + operator + chaos-mesh + karpenter ready"
+  if [[ "$GROVE" == "1" ]]; then
+    ok "observability + coordination + grove/kai + operator + chaos-mesh + karpenter ready"
+  else
+    ok "observability + coordination + operator + chaos-mesh + karpenter ready"
+  fi
 }
 
 platform_down() {
@@ -286,6 +347,9 @@ platform_down() {
   helm_uninstall "$REL_KPS" "$NS_MONITORING"
 
   helm_uninstall "$REL_DYNAMO_OPERATOR" "$NS_DYNAMO_SYSTEM"
+
+  # Track G controllers — best-effort, no-op if Track G was never installed.
+  grove_down
 
   helm_uninstall "$REL_NATS" "$NS_DYNAMO"
   helm_uninstall "$REL_ETCD" "$NS_DYNAMO"

@@ -83,6 +83,12 @@ NS_CHAOS="chaos-mesh"              # Chaos Mesh
 NS_KARPENTER="karpenter"           # Karpenter controller
 NS_LOAD="load"                     # k6 runner
 
+# Track G (opt-in) — Grove operator + KAI-Scheduler. Deliberately NOT in ALL_NAMESPACES so the
+# default bring-up never creates them; install_grove() creates them with helm --create-namespace
+# only when GROVE=1.
+NS_GROVE="grove-system"            # Grove operator (Track G)
+NS_KAI="kai-scheduler"             # KAI-Scheduler gang scheduler (Track G)
+
 # Ordered list used for bulk namespace creation.
 ALL_NAMESPACES=(
   "$NS_DYNAMO_SYSTEM"
@@ -105,6 +111,10 @@ REL_ETCD="etcd"
 REL_NATS="nats"
 REL_CHAOS="chaos-mesh"
 REL_KARPENTER="karpenter"
+
+# Track G (opt-in) — see platform/grove/ + platform.sh install_grove().
+REL_GROVE="grove"
+REL_KAI="kai-scheduler"
 
 # --------------------------------------------------------------------------
 # Terraform state (S3 backend, native locking) — see SHARED SPEC / ADR 0006
