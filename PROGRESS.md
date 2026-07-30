@@ -222,7 +222,7 @@ end-to-end; what remains:
 
 ## Track G — Grove gang-scheduling (GPU-free, additive)
 
-A new **optional track** that observes Dynamo's [Grove](https://github.com/NVIDIA/grove)
+A new **optional track** that observes Dynamo's [Grove](https://github.com/ai-dynamo/grove)
 orchestration layer — gang scheduling, hierarchical (multi-level) autoscaling of the
 prefill+decode unit, topology-aware placement, custom startup ordering — with the existing
 **mocker** fleet. Grove is a *control-plane* concern, so it needs **no GPUs**: the mocker runs
@@ -236,15 +236,25 @@ real-cost experiment that breaks `$0` idle. It gets its own ADR + GPU node class
 
 **Work items** (the change surface; additive — nothing here reorders the roadmap above):
 
-1. [x] **`platform/grove/` scaffolding** — Grove operator + KAI-Scheduler install values +
-   README, `# VERIFY:`'d against a pinned Grove/KAI release. *(done — `platform/grove/`
-   README + `values-grove-operator.yaml` + `values-kai-scheduler.yaml`; yamllint clean. The
-   operator-enablement contract and chart/version/API pins are the open `# VERIFY:`s.)*
-2. [ ] **`platform.sh` wiring** — an optional `install_grove()` gated behind `GROVE=1`
-   (default off) so the default bring-up is untouched.
-3. [ ] **`fleet/grove-scale.yaml`** — a mocker DGD deployed via Grove with a
-   `PodCliqueScalingGroup` for the P/D unit and high replica knobs, to create real
-   gang-scheduling pressure.
+1. [x] **`platform/grove/` scaffolding + upstream pins RESOLVED.** `platform/grove/` README +
+   `values-grove-operator.yaml` + `values-kai-scheduler.yaml`, yamllint clean. Pinned against
+   the Dynamo v1.3.0 compat matrix from primary sources: **Grove `v0.1.0-alpha.11`**
+   (`oci://ghcr.io/ai-dynamo/grove/grove-charts`), **KAI `v0.15.2`**
+   (`oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler`; ≥0.13.4 for 1.3.x, ≥0.15.2 for
+   topology-aware). API surface confirmed: `PodCliqueSet`/`PodClique`/`PodCliqueScalingGroup`
+   (`grove.io/v1alpha1`) — *PodGangSet is renamed*. Enablement confirmed: operator
+   `global.grove.enabled` + `global.kai-scheduler.enabled`, Grove-by-default (opt out with
+   annotation `nvidia.com/enable-grove: "false"`). Only *live* `# VERIFY:`s remain (render on
+   K8s 1.36; the queue-name gotcha below).
+2. [ ] **`platform.sh` wiring** — an optional `install_grove()` gated behind `GROVE=1` (default
+   off) that installs the two OCI charts **and** sets `global.grove.enabled=true` +
+   `global.kai-scheduler.enabled=true` on the `dynamo-platform` release, so the default
+   bring-up is untouched.
+3. [ ] **`fleet/grove-scale.yaml`** — reuse `disagg.yaml` **as-is** (the operator generates the
+   PodCliqueSet/PodClique/`PodCliqueScalingGroup` from it once Grove is on) with high replica
+   knobs to create gang-scheduling pressure, **and resolve the queue-name gotcha**: pods get
+   `nvidia.com/kai-scheduler-queue` (default `dynamo`) but KAI only auto-creates `default-queue`
+   — so create a KAI `Queue` named `dynamo` or set the annotation to `default-queue`.
 4. [ ] **`make track-g-up` / `track-g-down`** — install Grove + apply the overlay as one step,
    kept separate from `fleet-up PROFILE=…`.
 5. [ ] **Observability** — a PodMonitor + a Grafana panel for KAI-Scheduler / PodGang state

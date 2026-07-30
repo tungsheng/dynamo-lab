@@ -1,23 +1,34 @@
 # values-grove-operator.yaml
-# Grove — Dynamo's Kubernetes gang-scheduling / multi-component orchestration operator. Groups a
-# fleet's components into a gang (PodClique / PodCliqueScalingGroup / PodGangSet) that schedules
-# all-or-nothing and scales the prefill+decode unit as one. Track G only; the default `make up`
-# never installs this. See platform/grove/README.md and ADR
-# docs/adr/0009-track-g-grove-gang-scheduling.md.
+# Grove — Dynamo's Kubernetes gang-scheduling / multi-component orchestration operator. The
+# Dynamo operator translates a DGD's services into Grove PodCliqueSet / PodClique /
+# PodCliqueScalingGroup resources; Grove emits a PodGang that a gang scheduler (KAI) places
+# all-or-nothing. Track G only; the default `make up` never installs this. See
+# platform/grove/README.md and ADR docs/adr/0009-track-g-grove-gang-scheduling.md.
 #
-# Chart: VERIFY — pin the Grove operator Helm repo + version.
-#   e.g. helm upgrade --install grove <grove-repo>/grove-operator --version <x.y.z>
-# Namespace: grove-system  (VERIFY the operator's expected namespace)
+# Chart (OCI, no `helm repo add`):
+#   helm upgrade --install grove oci://ghcr.io/ai-dynamo/grove/grove-charts \
+#     --version v0.1.0-alpha.11 -n grove-system --create-namespace \
+#     -f platform/grove/values-grove-operator.yaml
+# Pin: Grove v0.1.0-alpha.11 — the Dynamo v1.3.0 compatibility matrix requires Grove
+#   >= v0.1.0-alpha.11 for dynamo-platform 1.3.x (docs/kubernetes/installation-guide.md@v1.3.0).
+# Namespace: grove-system (the chart has no hardcoded default — it uses .Release.Namespace).
+# CRDs: ship inside this chart's crds/ dir and install automatically on `helm install`
+#   (groups grove.io/v1alpha1 + scheduler.grove.io/v1alpha1). No separate CRD chart.
 #
-# The keys below are the install *intent*, not confirmed key paths — VERIFY every one against
-# the pinned Grove chart's values schema before wiring install_grove() (work item 2).
+# VERIFY (cannot check from here): render-verify with `helm template ... --include-crds` on
+#   K8s 1.36 before live use, and re-confirm the pin if you bump the Dynamo release — Grove APIs
+#   are pre-stable alpha and move in lockstep with dynamo-platform.
 
-# Grove defers pod placement to a gang scheduler; point it at KAI-Scheduler.
-# VERIFY: key path + the scheduler name KAI registers as (kai-scheduler vs kai).
-scheduler:
-  name: kai-scheduler
-
-# VERIFY: whether Grove CRDs ship inside this chart or install separately (like the Dynamo
-# operator's crd-apply init container). If separate, install_grove() must apply them first.
-crds:
-  install: true
+# Which scheduler backends the operator activates. kai-scheduler is already active by default
+# alongside default-scheduler; listing both documents Track G's intent explicitly.
+# Confirmed key path: config.scheduler.profiles in grove-charts values.yaml @ v0.1.0-alpha.11.
+config:
+  scheduler:
+    profiles:
+      - name: default-scheduler
+      - name: kai-scheduler
+  # Topology-aware placement is OFF by default. Turning it on additionally needs KAI >= v0.15.2
+  # (we pin KAI v0.15.2 for exactly this — see values-kai-scheduler.yaml) AND nodes labelled with
+  # topology domains to place against. Flip to true once those labels exist; left off until then.
+  topologyAwareScheduling:
+    enabled: false

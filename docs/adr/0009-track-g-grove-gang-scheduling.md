@@ -1,6 +1,6 @@
 # Track G: observe Grove gang-scheduling GPU-free; defer the NIXL data plane
 
-Add an **optional, additive track** that exercises [Grove](https://github.com/NVIDIA/grove)
+Add an **optional, additive track** that exercises [Grove](https://github.com/ai-dynamo/grove)
 — Dynamo's Kubernetes gang-scheduling / multi-component orchestration layer — with the
 existing mocker fleet, driven by a gang scheduler (KAI-Scheduler). It is gated behind its own
 switch and does **not** change the default `make up`/`down` path or the headline experiments
@@ -24,9 +24,11 @@ component plus a fleet overlay, never a reorder of the existing milestones.
 
 ## Consequences
 
-- New platform dependency (Grove operator + KAI-Scheduler) and new upstream API surface
-  (`PodClique` / `PodCliqueScalingGroup` / `PodGangSet` — exact group/version pinned + `#
-  VERIFY:`'d against a Grove release, as every upstream fact in this repo is).
+- New platform dependency (Grove operator + KAI-Scheduler, pinned against the Dynamo v1.3.0
+  compatibility matrix) and new upstream API surface (`PodCliqueSet` / `PodClique` /
+  `PodCliqueScalingGroup`, group `grove.io/v1alpha1`) — the operator generates these from the
+  DGD; we author none of them. Grove APIs are pre-stable alpha and move in lockstep with
+  dynamo-platform, so the pins are re-verified on any Dynamo bump.
 - The mocker validates *scheduling behaviour*, not the physics: real topology-aware placement
   only fully bites on real multi-node GPU topology, so placement is observed against
   synthetic topology labels + resource pressure. Called out as a known limitation.

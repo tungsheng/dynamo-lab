@@ -1,18 +1,39 @@
 # values-kai-scheduler.yaml
 # KAI-Scheduler — the gang scheduler Grove relies on to place a PodGang all-or-nothing. NVIDIA's
-# scheduler (open-sourced from Run:ai). Track G only. See platform/grove/README.md and ADR
+# scheduler (open-sourced from Run:ai). It watches Grove's PodGang resources and enforces gang
+# scheduling. Track G only. See platform/grove/README.md and ADR
 # docs/adr/0009-track-g-grove-gang-scheduling.md.
 #
-# Chart: VERIFY — pin the KAI-Scheduler Helm repo + version.
-#   e.g. helm upgrade --install kai-scheduler <kai-repo>/kai-scheduler --version <x.y.z>
-# Namespace: kai-scheduler  (VERIFY the scheduler's expected namespace)
+# Chart (OCI, no `helm repo add`):
+#   helm upgrade --install kai-scheduler \
+#     oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler \
+#     --version v0.15.2 -n kai-scheduler --create-namespace \
+#     -f platform/grove/values-kai-scheduler.yaml
+# Pin: KAI v0.15.2. The Dynamo v1.3.0 matrix floor is >= v0.13.4
+#   (docs/kubernetes/installation-guide.md@v1.3.0); Grove topology-aware placement needs
+#   >= v0.15.2. We pin v0.15.2 — the minimum that covers all three Track G observations (gang
+#   scheduling, multi-level autoscaling, topology-aware placement). Latest upstream is v0.16.8.
+# Namespace: kai-scheduler (do NOT submit workloads here — it is the scheduler's own namespace).
+# schedulerName workloads opt in with: `kai-scheduler` (the Dynamo operator sets this on fleet
+#   pods when Grove/KAI are enabled).
 #
-# The keys below are the install *intent*, not confirmed key paths — VERIFY every one against
-# the pinned KAI chart's values schema.
-
-# The mocker fleet is CPU-only, so KAI must schedule CPU gangs with no GPU/binpack assumptions.
-# Track G's whole point is watching gang formation, so gang scheduling must be on.
-# VERIFY: the key path for gang-scheduling enablement, and whether CPU-only needs any
-# resource-plan / queue config for the dynamo namespace.
-gangScheduling:
-  enabled: true
+# Gang scheduling is core, always-on logic — there is NO Helm toggle for it (so this file carries
+# no gangScheduling key). KAI auto-creates a default leaf queue (`default-queue`) at install, so
+# CPU-only mocker pods schedule with no extra Queue config, PROVIDED each pod carries a
+# `kai.scheduler/queue: <leaf>` label.
+#
+# QUEUE-NAME CONTRACT (the load-bearing gotcha): the Dynamo operator labels fleet pods with the
+# queue from DGD annotation `nvidia.com/kai-scheduler-queue` (default `dynamo`), but KAI only
+# auto-creates `default-queue`. A pod pointing at a non-existent queue never schedules. So Track G
+# must either (a) create a KAI leaf Queue named `dynamo`, or (b) set that DGD annotation to
+# `default-queue`. Resolved in the Track G fleet overlay (work item 3).
+#
+# VERIFY (cannot check from here): confirm the operator's default queue-annotation value and KAI's
+#   default queue name live, then pick (a) or (b). Render-verify this chart on K8s 1.36 first.
+#
+# Defaults schedule CPU-only pods out of the box, so no values are overridden here. Track G will
+# likely want scheduler/gang metrics scraped — the chart exposes a top-level `prometheus` key
+# (default off); confirm its subkey shape against the pinned chart before enabling:
+#   # prometheus:
+#   #   enabled: true
+{}
