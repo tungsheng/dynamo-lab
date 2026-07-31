@@ -39,10 +39,11 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
 - [ ] **Track G — Grove gang-scheduling (GPU-free), additive.** New optional track (ADR
   [0009](docs/adr/0009-track-g-grove-gang-scheduling.md)) to observe Dynamo's Grove gang
   scheduling, multi-level autoscaling, and topology-aware placement with the mocker — no GPUs,
-  no change to the A/B/C roadmap or the default `make up`. Planning, ADR, `platform/grove/`
-  scaffolding, install wiring (`GROVE=1`), the `grove-scale` fleet overlay, and `make
-  track-g-up`/`track-g-down` all landed; observability + vocab (items 5–6) and live validation
-  remain. (Track N / NIXL data plane deferred — it needs real GPUs.)
+  no change to the A/B/C roadmap or the default `make up`. **Static build COMPLETE** (items 1–7):
+  ADR, `platform/grove/` scaffolding, install wiring (`GROVE=1`), the `grove-scale` fleet overlay,
+  `make track-g-up`/`track-g-down`, observability (PodMonitor + dashboard), and `CONTEXT.md` vocab
+  all landed + lint-clean. Only **live validation** remains (render on 1.36, the queue name, watch
+  a gang reconcile) — best folded into the experiment-A session. (Track N / NIXL deferred — GPUs.)
 
 ## What's built
 
@@ -268,7 +269,8 @@ real-cost experiment that breaks `$0` idle. It gets its own ADR + GPU node class
    (gang-blocked/running + node count for multi-level autoscaling) so they work immediately;
    PodMonitor selectors/ports + the scheduler-internals panel are `# VERIFY:`-marked. Dashboard
    JSON validated; `${datasource}` survives envsubst; yamllint + shellcheck clean.)*
-6. [ ] **`CONTEXT.md` vocabulary** — Grove, PodGang / gang scheduling, Track G / Track N.
+6. [x] **`CONTEXT.md` vocabulary** — Grove, PodGang / gang scheduling, Track G / Track N.
+   *(done — added the four terms with `_Avoid_` notes matching the CONTEXT.md style.)*
 7. [x] **ADR 0009** — decision, GPU-free rationale, Track N deferral. *(done)*
 
 ## Known limitations
