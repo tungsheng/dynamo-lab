@@ -3,8 +3,9 @@
 # A DERIVED COPY of fleet/disagg.yaml (keep the two in sync — same components, envs, ports,
 # images, worker node-steering, and mocker args). Only THREE deltas make this the Track G
 # profile, all GPU-free — see platform/grove/README.md + ADR 0009:
-#   1. metadata.name is `mocker-grove` (so it can coexist with mocker-disagg) and carries the
-#      `dynamo-lab/track: grove` label.
+#   1. metadata.name is `mocker-grove` (a distinct DGD name + a `dynamo-lab/track: grove` label,
+#      so `kubectl get dgd` tells the tracks apart) — deploy one topology at a time, though: this
+#      shares the tainted `workers` NodePool and the OTEL service names with disagg.
 #   2. Two annotations wire the operator's Grove path (Grove is selected by default once
 #      global.grove.enabled is set at operator install — see platform.sh install_grove/GROVE=1):
 #        - nvidia.com/enable-grove: makes Track G's intent explicit (default is already Grove;

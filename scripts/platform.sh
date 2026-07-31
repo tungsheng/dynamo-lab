@@ -190,11 +190,17 @@ grove_operator_flags() {
   printf -- '--set global.grove.enabled=true --set global.kai-scheduler.enabled=true'
 }
 
-# grove_down — best-effort removal of the Track G controllers. No-op when never installed
-# (helm_uninstall guards on `helm status`), so it is safe to call on every platform teardown.
+# grove_down — best-effort removal of ALL of Track G: the Grove/KAI controllers AND the
+# observability resources install_grove() applied into the `monitoring` namespace (a PodMonitor +
+# a Grafana dashboard ConfigMap). Those live in `monitoring`, which survives both platform-down and
+# track-g-down and is owned by no release we uninstall, so they must be deleted explicitly or they
+# orphan. No-op when never installed (helm_uninstall guards on `helm status`; delete_manifests is
+# --ignore-not-found and `|| true`), so it is safe to call on every platform teardown.
 grove_down() {
   helm_uninstall "$REL_KAI" "$NS_KAI"
   helm_uninstall "$REL_GROVE" "$NS_GROVE"
+  delete_manifests "$PLATFORM_DIR/grove/podmonitor-grove.yaml"
+  delete_manifests "$PLATFORM_DIR/grove/grafana-grove-dashboard-configmap.yaml"
 }
 
 # --- Dynamo operator ------------------------------------------------------
