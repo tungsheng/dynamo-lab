@@ -261,8 +261,13 @@ real-cost experiment that breaks `$0` idle. It gets its own ADR + GPU node class
 4. [x] **`make track-g-up` / `track-g-down`** — install Grove + apply the overlay as one step,
    kept separate from `fleet-up PROFILE=…`. *(done — Makefile targets + `platform.sh`
    `grove-up`/`grove-down` actions for an already-running cluster; `make -n` verified.)*
-5. [ ] **Observability** — a PodMonitor + a Grafana panel for KAI-Scheduler / PodGang state
+5. [x] **Observability** — a PodMonitor + a Grafana dashboard for KAI-Scheduler / PodGang state
    (scheduled vs gang-blocked `Pending`), so gang formation is watchable next to the fleet.
+   *(done — `platform/grove/podmonitor-grove.yaml` + `grafana-grove-dashboard-configmap.yaml`,
+   applied by `install_grove()`. Core panels use kube-state-metrics filtered to `mocker-grove.*`
+   (gang-blocked/running + node count for multi-level autoscaling) so they work immediately;
+   PodMonitor selectors/ports + the scheduler-internals panel are `# VERIFY:`-marked. Dashboard
+   JSON validated; `${datasource}` survives envsubst; yamllint + shellcheck clean.)*
 6. [ ] **`CONTEXT.md` vocabulary** — Grove, PodGang / gang scheduling, Track G / Track N.
 7. [x] **ADR 0009** — decision, GPU-free rationale, Track N deferral. *(done)*
 

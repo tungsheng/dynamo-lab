@@ -30,6 +30,18 @@ and install automatically. The operator turns a DGD's `services` into Grove `Pod
 `PodGang` that KAI places all-or-nothing. **We author none of those** — only the two installs and
 the existing DGD.
 
+Two more files in this folder are applied by `install_grove()` (not Helm) for observability:
+
+| File                                     | Kind       | What it does                                            |
+|------------------------------------------|------------|--------------------------------------------------------|
+| `podmonitor-grove.yaml`                  | PodMonitor | scrapes the Grove operator + KAI-Scheduler metrics     |
+| `grafana-grove-dashboard-configmap.yaml` | ConfigMap  | Grafana dashboard for gang-blocked / gang state        |
+
+The dashboard's core panels use kube-state-metrics (already scraped) filtered to the grove fleet
+by `pod=~"mocker-grove.*"`, so they work immediately; the scheduler-internals panel + the
+PodMonitor selectors/ports are `# VERIFY:`-marked (need KAI/Grove metrics enabled and confirmed
+live).
+
 ## Enablement contract with the Dynamo operator (must match)
 
 Confirmed against `docs/kubernetes/{grove,installation-guide,deployment/multinode-deployment}.md`

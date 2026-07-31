@@ -1,0 +1,174 @@
+# grafana-grove-dashboard-configmap.yaml
+# Track G (ADR 0009): Grafana dashboard for Grove gang-scheduling, GPU-free. Applied ONLY by
+# install_grove() (GROVE=1). Discovered by the Grafana sidecar via the grafana_dashboard label.
+#
+# The core panels use kube-state-metrics (shipped + scraped by kube-prometheus-stack, so they work
+# immediately), filtered to the grove fleet by pod-name prefix `mocker-grove.*` — no label joins:
+#   - Gang-blocked (Pending) vs Running grove pods = the gang-scheduling signal.
+#   - Cluster node count = the multi-level autoscaling signal (a gang that can't fit grows nodes).
+# The "Scheduler internals" row needs KAI/Grove metrics enabled + scraped (podmonitor-grove.yaml)
+# and the real metric names — marked VERIFY in those panels' descriptions.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-grove-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/track: grove
+data:
+  dynamo-grove-dashboard.json: |-
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "description": "Track G - Grove gang-scheduling / KAI-Scheduler observability (GPU-free). See ADR 0009.",
+      "editable": true,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 100,
+          "title": "Gang scheduling (Track G)",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Grove fleet pods stuck Pending — the gang-blocked signal. Grove schedules the whole PodCliqueSet all-or-nothing, so a gang that cannot fit shows here until nodes appear.",
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } }, "overrides": [] },
+          "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+          "id": 1,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "editorMode": "code",
+              "expr": "sum(kube_pod_status_phase{namespace=\"dynamo\", pod=~\"mocker-grove.*\", phase=\"Pending\"})",
+              "legendFormat": "pending",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Gang-blocked (Pending) grove pods",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Grove fleet pods Running — the gang, once placed.",
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } }, "overrides": [] },
+          "gridPos": { "h": 6, "w": 6, "x": 6, "y": 1 },
+          "id": 2,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "editorMode": "code",
+              "expr": "sum(kube_pod_status_phase{namespace=\"dynamo\", pod=~\"mocker-grove.*\", phase=\"Running\"})",
+              "legendFormat": "running",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Running grove pods",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Cluster nodes over time. When a gang cannot fit on current capacity, Karpenter (ADR 0008) grows nodes — the multi-level autoscaling signal.",
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] },
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 1 },
+          "id": 3,
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "editorMode": "code",
+              "expr": "count(kube_node_info)",
+              "legendFormat": "nodes",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Cluster nodes (multi-level autoscaling)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Grove fleet pods by phase over time — watch the gang flip from Pending to Running together.",
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "stacking": { "group": "A", "mode": "normal" } } }, "overrides": [] },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+          "id": 4,
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "editorMode": "code",
+              "expr": "sum by (phase) (kube_pod_status_phase{namespace=\"dynamo\", pod=~\"mocker-grove.*\", phase=~\"Pending|Running|Failed\"})",
+              "legendFormat": "{{phase}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Grove fleet pods by phase",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "description": "Grove-managed resources the operator generated from the DGD (PodCliqueSet / PodClique / PodCliqueScalingGroup). VERIFY: needs the Grove operator custom-resource metrics enabled + the real metric name; count via kube-state-metrics custom-resource-state config if absent. Placeholder expr — expect No data until wired.",
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+          "id": 5,
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "editorMode": "code",
+              "expr": "sum by (namespace) (grove_podgang_scheduled)",
+              "legendFormat": "podgangs scheduled (VERIFY metric)",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Scheduler internals — PodGang scheduled (VERIFY)",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["dynamo-lab", "track-g", "grove"],
+      "templating": {
+        "list": [
+          {
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "label": "Datasource",
+            "multi": false,
+            "name": "datasource",
+            "options": [],
+            "query": "prometheus",
+            "refresh": 1,
+            "type": "datasource"
+          }
+        ]
+      },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "title": "Track G - Grove gang-scheduling",
+      "uid": "dynamo-lab-track-g-grove",
+      "version": 1
+    }

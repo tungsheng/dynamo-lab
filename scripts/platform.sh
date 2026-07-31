@@ -172,6 +172,14 @@ install_grove() {
     $(values_args "$PLATFORM_DIR/grove/values-kai-scheduler.yaml") \
     --wait --timeout "$HELM_WAIT_TIMEOUT"
   ok "kai-scheduler installed (${KAI_VERSION})"
+
+  # Track G observability (opt-in): a PodMonitor for the scheduler internals + a Grafana dashboard
+  # for gang state. Needs the PodMonitor CRD + Grafana sidecar from kube-prometheus-stack, which is
+  # installed before Grove in platform_up (and assumed already up on the grove-up path).
+  log "applying Track G observability (PodMonitor + Grafana dashboard)"
+  apply_manifests "$PLATFORM_DIR/grove/podmonitor-grove.yaml"
+  apply_manifests "$PLATFORM_DIR/grove/grafana-grove-dashboard-configmap.yaml"
+  ok "grove observability applied"
 }
 
 # grove_operator_flags — echo the extra operator --set flags that turn on Grove/KAI integration
