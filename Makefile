@@ -26,7 +26,8 @@ S := scripts
 
 .PHONY: help up down bootstrap kubeconfig infra-up infra-down \
         platform-up platform-down fleet-up fleet-down \
-        chaos-start chaos-stop load-start load-stop dashboards pause resume
+        chaos-start chaos-stop load-start load-stop dashboards pause resume \
+        track-g-up track-g-down
 
 help: ## Show this help
 	@echo "dynamo-lab — targets:"
@@ -80,6 +81,15 @@ load-start: ## Run k6 (PROFILE=baseline|ramp|spike|sustained|soak default spike;
 
 load-stop: ## Stop the k6 load job
 	@$(S)/load.sh stop "$(or $(PROFILE),spike)"
+
+# --- Track G (Grove gang-scheduling, GPU-free, opt-in) --------------------
+track-g-up: ## Track G: install Grove+KAI, enable on the operator, deploy the grove-scale fleet
+	@GROVE=1 $(S)/platform.sh grove-up
+	@$(S)/fleet.sh up grove-scale
+
+track-g-down: ## Track G: remove the grove-scale fleet, then Grove/KAI (operator reverts to default)
+	@$(S)/fleet.sh down grove-scale
+	@$(S)/platform.sh grove-down
 
 # --- Extras ---------------------------------------------------------------
 dashboards: ## Port-forward Grafana and print URL + credentials

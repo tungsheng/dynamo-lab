@@ -1,0 +1,44 @@
+# podmonitor-grove.yaml
+# Track G (ADR 0009): PodMonitor for the Grove operator + KAI-Scheduler control-plane metrics, so
+# Prometheus scrapes the gang-scheduler internals next to the fleet. Applied ONLY by install_grove()
+# (GROVE=1), never on the default path. Discovered cluster-wide (kube-prometheus-stack runs with
+# podMonitorSelectorNilUsesHelmValues=false — values-kube-prometheus-stack.yaml), so this object
+# lives in `monitoring` and selects the grove-system + kai-scheduler namespaces.
+#
+# VERIFY (live — could not confirm statically):
+#   - Metrics must be ENABLED on both charts first: KAI exposes a top-level `prometheus` value
+#     (default OFF — see platform/grove/values-kai-scheduler.yaml); the Grove operator serves
+#     controller-runtime metrics via config.server.metrics. Enable those, then confirm the metrics
+#     port NAME and label selectors below (`kubectl -n grove-system get pod --show-labels`,
+#     `kubectl -n kai-scheduler describe pod` for the metrics port name).
+#   - A named port that no pod declares, or a selector that matches nothing, simply yields no
+#     targets — harmless — so the broad `Exists` selector + two likely port names are safe until
+#     the exact values are verified live.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: grove-gang-scheduling
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    dynamo-lab/track: grove
+spec:
+  namespaceSelector:
+    matchNames:
+      - grove-system
+      - kai-scheduler
+  selector:
+    matchExpressions:
+      # VERIFY: matches the Grove operator + KAI-Scheduler pods. Both conventionally set
+      # app.kubernetes.io/name; confirm the actual values on the pinned charts. `Exists` keeps
+      # this broad until then.
+      - key: app.kubernetes.io/name
+        operator: Exists
+  podMetricsEndpoints:
+    # VERIFY: the metrics port NAME each chart declares (commonly `metrics` or `http-metrics`).
+    - port: metrics
+      path: /metrics
+      interval: 30s
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
