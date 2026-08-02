@@ -13,7 +13,8 @@ watch the operator reconcile it; kill the operator and watch what stops healing.
 
 ## Consequences
 
-- Dependency on the operator's evolving CRD API (`nvidia.com/v1alpha1`); the lab is pinned
-  to a specific Dynamo release and CRD contents are verified against that tag.
+- Dependency on the operator's evolving CRD API (now `nvidia.com/v1beta1`; `v1alpha1` is
+  deprecated but still served via the conversion webhook at v1.3.0); the lab is pinned to a
+  specific Dynamo release and CRD contents are verified against that tag.
 - Rejected: **hand-rolled manifests** — would re-implement autoscaling and self-healing and
   diverge from how Dynamo is meant to run.

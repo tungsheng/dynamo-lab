@@ -4,7 +4,8 @@ Installs the Dynamo Kubernetes Platform via the **platform** chart (`dynamo-plat
 contains the operator). See ADR `docs/adr/0002-operator-and-graph-deployment-crd.md`.
 
 - Namespace: **dynamo-system**
-- CRD API the fleet uses: `nvidia.com/v1alpha1` (`DynamoGraphDeployment`)
+- CRD API the fleet uses: `nvidia.com/v1beta1` (`DynamoGraphDeployment`); the operator's
+  conversion webhook also serves the deprecated `nvidia.com/v1alpha1` at v1.3.0
 - The operator reconciles the fleet declared in `fleet/agg.yaml` / `fleet/disagg.yaml`
   (namespace `dynamo`). We disable the operator's namespace restriction so a `dynamo-system`
   operator can manage DGDs in the `dynamo` namespace.

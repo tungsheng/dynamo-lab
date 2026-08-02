@@ -204,8 +204,22 @@ end-to-end; what remains:
    bumped + render-verified; bitnami/etcd held at 10.7.1 with a verified `bitnamilegacy` image.
 2. **Live-only fleet checks — largely DONE (Pass 7).** Fleet component-type labels, the fixed
    probe/port wiring, and the PodMonitor scrape are confirmed live on agg + disagg. Still to
-   exercise: the **chaos** selectors + annotation bridge against the live fleet (experiment A), and
-   the **v1alpha1 → v1beta1** DGD apiVersion bump (the operator logs a deprecation warning on apply).
+   exercise live: the **chaos** selectors + annotation bridge against the live fleet (experiment A).
+   The **v1alpha1 → v1beta1 DGD migration is now WRITTEN** (see below) but **not live-validated**.
+
+**v1beta1 migration (WRITTEN — not live-validated).** All three DGDs (`agg`, `disagg`,
+`grove-scale`) were rewritten from `nvidia.com/v1alpha1` to **`nvidia.com/v1beta1`**. This was NOT
+an apiVersion swap: v1beta1 is a schema redesign, verified against the Dynamo v1.3.0 CRD + Go API
+types from primary sources — `spec.services{map}` → `spec.components[list]` (required `name`),
+`componentType`/`subComponentType` → `type` (prefill/decode first-class), and
+`resources`/`envs`/`extraPodSpec.mainContainer` → a `podTemplate` with a container named `main`
+(nodeSelector/tolerations under `podTemplate.spec`). The container command/args/env values are
+unchanged, so behaviour should match. **Caveats for the live run:** these manifests have NOT been
+applied to a cluster (the v1alpha1 form is what served on EKS 1.36; it remains in git history and
+is still served by the conversion webhook at v1.3.0, so a rollback is a one-file revert); and
+`spec.backendFramework` is omitted because the enum (`sglang|vllm|trtllm`) has no `mocker` value —
+if the operator's DCD generator needs a resolvable backend, set `backendFramework: vllm`. The next
+`make up` is the validation.
 3. **Infra versions — RESOLVED (Pass 5).** EKS control-plane `1.31` → **`1.36`** (1.31 had aged
    into paid *extended* support; 1.36 is the latest with standard support to 2027-08-02). Karpenter
    helm chart `1.0.8` → **`1.14.0`** (latest; supports K8s 1.36, needs ≥1.13). AL2023 AMI alias
@@ -277,6 +291,9 @@ real-cost experiment that breaks `$0` idle. It gets its own ADR + GPU node class
 
 - Deployed + validated on EKS 1.36 (agg + disagg fleets serve; planner autoscaling loop runs; k6
   spike to 300 VUs with 0 errors). Chaos (experiment A) is the one headline experiment not yet run.
+- The fleet manifests were migrated `v1alpha1` → **`v1beta1`** (schema rewrite, primary-source
+  verified) but are **NOT live-validated** — the live EKS 1.36 run used the `v1alpha1` form. See the
+  v1beta1-migration note above; the next `make up` validates it, and rollback is a one-file revert.
 - Trace→logs correlation (Tempo→Loki `service_name`) is PLAUSIBLE-only until verified live; note the
   OTLP-logs exporter also logs a cosmetic `127.0.0.1:4317` connection error (logs ship via promtail).
 - The chaos annotation bridge installs its Python deps at pod start (no custom image); fine for
