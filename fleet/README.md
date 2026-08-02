@@ -115,6 +115,10 @@ Adapted from real upstream examples in `github.com/ai-dynamo/dynamo`:
 `examples/backends/mocker/deploy/agg.yaml` and `.../disagg.yaml` (mocker command,
 `--disaggregation-mode`, `--planner-profile-data`, `componentType`/`subComponentType`
 field structure), with the `Planner` service and `DYN_ROUTER_MODE=kv` router pattern taken
-from `examples/backends/vllm/deploy/{agg_router,disagg_planner}.yaml`. Upstream field names
-are preserved; only values were adapted to this lab's namespace, coordination plane, model,
-resources, and observability wiring.
+from `examples/backends/vllm/deploy/{agg_router,disagg_planner}.yaml`. The **DGD wrapper is
+`nvidia.com/v1beta1`** (`spec.components` list, per-component `podTemplate` with a container named
+`main`, `type: frontend|worker|prefill|decode|planner`); the upstream mocker examples are still
+`v1alpha1`, so the container command/args/env values are the preserved upstream ones while the
+surrounding schema is the v1beta1 shape. Only values were adapted to this lab's namespace,
+coordination plane, model, resources, and observability wiring. **The v1beta1 manifests are not yet
+live-validated** — the v1alpha1 form is what served on EKS 1.36 (see PROGRESS.md).
