@@ -227,8 +227,17 @@ bootstrap state bucket is intentionally retained).
   restart before settling.
 
 Not exercised this session: the chaos **annotation bridge** (Grafana markers) and a full **chaos
-monkey** Schedule run; the KAI/Grove-internal metrics scrape (needs KAI `prometheus` enabled). Teardown
-via `FORCE=1 make down`.
+monkey** Schedule run; the KAI/Grove-internal metrics scrape (needs KAI `prometheus` enabled).
+
+**Teardown bug found + fixed (Track G).** `FORCE=1 make down` **hung for 33 min**: `down.sh`
+step 2 removed only the `agg`/`disagg` fleets, so the Track G `grove-scale` gang stayed pinned to
+the Karpenter worker node — which then could not drain, so step 3's Karpenter **NodePool delete
+blocked forever** (the cluster kept billing). Recovered by hand (delete `mocker-grove` → delete
+nodeclaim → Karpenter terminated the EC2 → PVCs → `make infra-down` → EBS sweep → verified `$0`).
+**Fix:** `down.sh` step 2 now `kubectl delete dynamographdeployment --all` (any profile, `--timeout`
+-bounded) so no fleet — including future ones — can wedge the Karpenter teardown. Shellcheck-clean;
+**not re-validated live** (would need another `make up`). Still-open teardown hardening: consider
+uninstalling Grove/KAI only after confirming all `PodCliqueSet`s are gone.
 
 ## Outstanding — after the first live `make up`
 
