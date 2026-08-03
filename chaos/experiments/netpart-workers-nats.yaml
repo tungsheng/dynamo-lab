@@ -23,8 +23,12 @@ spec:
   selector:
     namespaces:
       - dynamo
-    labelSelectors:
-      nvidia.com/dynamo-component-type: worker
+    # Live-verified 2026-07-31 (v1beta1): disagg has NO component-type=worker pods (they are
+    # component-type=prefill|decode). Only nvidia.com/dynamo-worker-hash is on both worker pools
+    # and not on frontend/planner, but its value is a per-deploy hash — so match on Exists.
+    expressionSelectors:
+      - key: nvidia.com/dynamo-worker-hash
+        operator: Exists
   target:
     mode: all
     selector:

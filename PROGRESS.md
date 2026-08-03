@@ -32,8 +32,18 @@ Build/status log for the Dynamo Lab. See [README.md](README.md) for usage,
   7,596 iterations, **0 errors**, worker stable (experiment C). **Disaggregated** fleet validated
   end-to-end (frontend + prefill + decode + planner all Ready, `/health` 200) with the **planner
   autoscaling loop running live** (experiment B). Karpenter scaled worker nodes on demand (ADR 0008).
-- [ ] **Chaos experiment** — Chaos Mesh fault injection against the live fleet (experiment A) — not
-  yet exercised.
+- [x] **Chaos experiment (A) — DONE & LIVE-VALIDATED (2026-07-31).** Chaos Mesh pod-kill of a
+  decode worker matched + injected + self-healed (fresh worker Ready in ~20s); a latency
+  experiment matched prefill+decode+frontend. Surfaced + fixed a real bug: the chaos selectors
+  used `component-type: worker`, which matches **zero** v1beta1 pods (they are
+  `component-type: prefill|decode`) — 5 chaos files fixed (see Live session below).
+- [x] **v1beta1 fleet migration — LIVE-VALIDATED (2026-07-31).** agg + disagg + grove-scale all
+  reconcile to DGD Ready on EKS 1.36; component labels, frontend Service name, and the omitted
+  `backendFramework` all confirmed fine.
+- [x] **Track G — LIVE-VALIDATED (2026-07-31).** `make track-g-up` installed Grove v0.1.0-alpha.11
+  + KAI v0.15.2; the operator renders `mocker-grove` as a Grove `PodCliqueSet`; KAI schedules the
+  gang (`schedulerName: kai-scheduler`, queue `default-queue` — the gotcha fix works); Karpenter
+  grew 2 worker nodes for the 6-worker gang. See Live session below.
 - [ ] **Resolve remaining `# VERIFY` markers** (observability / coordination / chaos / load /
   scripts). Terraform/infra fully resolved; the fleet layer is now **live-validated**.
 - [ ] **Track G — Grove gang-scheduling (GPU-free), additive.** New optional track (ADR
@@ -195,6 +205,31 @@ waits up to 4m for the CSI driver to release cluster-tagged volumes before destr
 deletes any that survive afterward. Re-verified `$0` idle (no EKS / EC2 / NAT / EBS remain; the
 bootstrap state bucket is intentionally retained).
 
+**Live session — experiment A + Track G + v1beta1 (2026-07-31).** A full `make up` on EKS 1.36
+(Helm 4 CLI, no incompatibility) brought up the whole platform + the **v1beta1** agg fleet to DGD
+`Ready`. Three things validated, one real bug fixed:
+
+- **v1beta1 (all 3 fleets):** agg, disagg, and grove-scale each reconcile to `Ready`; the migration
+  is confirmed correct live (labels, Service name, `backendFramework` omission — see the note above).
+- **Experiment A (chaos):** pod-kill of a decode worker matched + injected + self-healed (~20s);
+  a latency experiment matched prefill+decode+frontend. **Bug found + fixed:** the chaos selectors
+  required `nvidia.com/dynamo-component-type: worker`, but v1beta1 disagg workers carry
+  `component-type: prefill|decode` (no `worker`), so every worker selector matched **zero** pods.
+  Fixed 5 files — specific pools now select on `sub-component-type` (works in both schema versions);
+  "all workers" now use `expressionSelectors` on `dynamo-worker-hash` (Exists — the only label
+  unique to prefill+decode; value is a per-deploy hash). Both selector forms verified live.
+- **Track G:** `make track-g-up` installed Grove v0.1.0-alpha.11 + KAI v0.15.2 (OCI charts render +
+  pull clean); the operator renders `mocker-grove` as a Grove `PodCliqueSet` (4 PodCliques, all
+  Ready); **KAI schedules the gang** (`schedulerName: kai-scheduler`), and the **queue-name gotcha
+  fix works** (pods scheduled on `default-queue`, Running not gang-blocked). Karpenter grew 2 worker
+  nodes for the 6-worker gang (multi-level autoscaling). Minor: the `PodGang` object reports
+  `PHASE: Pending` while all member pods run (a Grove-alpha status quirk); grove-operator took 1
+  restart before settling.
+
+Not exercised this session: the chaos **annotation bridge** (Grafana markers) and a full **chaos
+monkey** Schedule run; the KAI/Grove-internal metrics scrape (needs KAI `prometheus` enabled). Teardown
+via `FORCE=1 make down`.
+
 ## Outstanding — after the first live `make up`
 
 Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works
@@ -207,19 +242,19 @@ end-to-end; what remains:
    exercise live: the **chaos** selectors + annotation bridge against the live fleet (experiment A).
    The **v1alpha1 → v1beta1 DGD migration is now WRITTEN** (see below) but **not live-validated**.
 
-**v1beta1 migration (WRITTEN — not live-validated).** All three DGDs (`agg`, `disagg`,
+**v1beta1 migration — LIVE-VALIDATED (2026-07-31).** All three DGDs (`agg`, `disagg`,
 `grove-scale`) were rewritten from `nvidia.com/v1alpha1` to **`nvidia.com/v1beta1`**. This was NOT
 an apiVersion swap: v1beta1 is a schema redesign, verified against the Dynamo v1.3.0 CRD + Go API
 types from primary sources — `spec.services{map}` → `spec.components[list]` (required `name`),
 `componentType`/`subComponentType` → `type` (prefill/decode first-class), and
 `resources`/`envs`/`extraPodSpec.mainContainer` → a `podTemplate` with a container named `main`
-(nodeSelector/tolerations under `podTemplate.spec`). The container command/args/env values are
-unchanged, so behaviour should match. **Caveats for the live run:** these manifests have NOT been
-applied to a cluster (the v1alpha1 form is what served on EKS 1.36; it remains in git history and
-is still served by the conversion webhook at v1.3.0, so a rollback is a one-file revert); and
-`spec.backendFramework` is omitted because the enum (`sglang|vllm|trtllm`) has no `mocker` value —
-if the operator's DCD generator needs a resolvable backend, set `backendFramework: vllm`. The next
-`make up` is the validation.
+(nodeSelector/tolerations under `podTemplate.spec`). **Confirmed live on EKS 1.36:** all three
+reconcile to DGD `Ready`; pods carry the operator's component-type labels (frontend/worker, and
+`prefill`/`decode` **directly** — not `worker`+sub-type, which is what broke the chaos selectors);
+the frontend Service is `<dgd>-frontend` as designed (`FRONTEND_URL` unaffected); and **omitting
+`spec.backendFramework` caused no problem** (the enum `sglang|vllm|trtllm` has no `mocker` — it can
+stay omitted). The v1alpha1 form remains in git history + is served by the conversion webhook, so
+rollback is still a one-file revert.
 3. **Infra versions — RESOLVED (Pass 5).** EKS control-plane `1.31` → **`1.36`** (1.31 had aged
    into paid *extended* support; 1.36 is the latest with standard support to 2027-08-02). Karpenter
    helm chart `1.0.8` → **`1.14.0`** (latest; supports K8s 1.36, needs ≥1.13). AL2023 AMI alias

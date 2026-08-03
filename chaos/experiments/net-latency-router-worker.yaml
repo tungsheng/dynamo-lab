@@ -22,16 +22,18 @@ spec:
     namespaces:
       - dynamo
     labelSelectors:
-      # VERIFY: operator label for the frontend component
-      #   (nvidia.com/dynamo-component-type=frontend).
+      # Live-verified 2026-07-31 (v1beta1): the frontend carries component-type=frontend.
       nvidia.com/dynamo-component-type: frontend
   target:                         # destination: the worker pool(s)
     mode: all
     selector:
       namespaces:
         - dynamo
-      labelSelectors:
-        nvidia.com/dynamo-component-type: worker
+      # Live-verified 2026-07-31 (v1beta1): no component-type=worker pods; match any worker pool
+      # (prefill+decode) by the worker-hash label (Exists — its value is a per-deploy hash).
+      expressionSelectors:
+        - key: nvidia.com/dynamo-worker-hash
+          operator: Exists
   delay:
     latency: "150ms"
     correlation: "50"

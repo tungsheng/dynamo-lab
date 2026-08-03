@@ -22,6 +22,8 @@ spec:
     namespaces:
       - dynamo
     labelSelectors:
-      # VERIFY: operator label contract — sub-component-type value for prefill pools.
-      nvidia.com/dynamo-component-type: worker
+      # Live-verified 2026-07-31 (EKS 1.36, v1beta1): prefill pods carry
+      # nvidia.com/dynamo-sub-component-type=prefill (and component-type=prefill, NOT worker). The
+      # old component-type=worker requirement matched zero pods. sub-component-type alone works in
+      # both v1beta1 and the old v1alpha1.
       nvidia.com/dynamo-sub-component-type: prefill

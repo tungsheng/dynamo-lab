@@ -23,8 +23,10 @@ spec:
     namespaces:
       - dynamo
     labelSelectors:
-      # VERIFY: operator label contract (deploy/operator/internal/consts/consts.go):
-      #   nvidia.com/dynamo-component-type / nvidia.com/dynamo-sub-component-type.
-      nvidia.com/dynamo-component-type: worker
+      # Live-verified 2026-07-31 (EKS 1.36, v1beta1): disagg workers carry
+      # nvidia.com/dynamo-component-type=decode AND nvidia.com/dynamo-sub-component-type=decode.
+      # The old selector also required component-type=worker, which v1beta1 does NOT set, so it
+      # matched ZERO pods. Selecting on sub-component-type alone matches in BOTH v1beta1 and the
+      # old v1alpha1 (which used component-type=worker + sub-component-type=decode).
       nvidia.com/dynamo-sub-component-type: decode
   # duration is not set: pod-kill is instantaneous and self-recovers via rescheduling.
