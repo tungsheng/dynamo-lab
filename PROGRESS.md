@@ -235,9 +235,35 @@ the Karpenter worker node — which then could not drain, so step 3's Karpenter 
 blocked forever** (the cluster kept billing). Recovered by hand (delete `mocker-grove` → delete
 nodeclaim → Karpenter terminated the EC2 → PVCs → `make infra-down` → EBS sweep → verified `$0`).
 **Fix:** `down.sh` step 2 now `kubectl delete dynamographdeployment --all` (any profile, `--timeout`
--bounded) so no fleet — including future ones — can wedge the Karpenter teardown. Shellcheck-clean;
-**not re-validated live** (would need another `make up`). Still-open teardown hardening: consider
-uninstalling Grove/KAI only after confirming all `PodCliqueSet`s are gone.
+-bounded) so no fleet — including future ones — can wedge the Karpenter teardown. **Re-validated
+live in the full-battery session below**: with `grove-scale` deployed, `make down` cleared the
+in-cluster cleanup in ~2–3 min and reached `terraform destroy` with no hang (vs 33 min before).
+
+**Live session 2 — full A/B/C battery + Track G re-check (2026-07-31).** A second `make up` (again
+on Helm 4, clean) re-ran everything on the merged `main`:
+
+- **Experiment C** — k6 `spike` to **300/300 VUs**, **9,145 iterations, 0 errors**, agg worker
+  stable — on the **v1beta1 agg** fleet.
+- **Experiment B** — the planner's **load-scaling loop runs live** on **v1beta1 disagg** (polls
+  prefill/decode FPM, emits `HOLD | prefill=1 decode=1` decisions with no load).
+- **Experiment A** — pod-kill of a decode worker matched (the **fixed v1beta1 selector**), injected,
+  and **self-healed to Ready** (~90s); the **chaos monkey** Schedule fired on its own
+  (`monkey-pod-kill-coordination`); and the **annotation bridge posted 2 Grafana annotations**,
+  confirmed via the Grafana API (`[chaos] PodChaos/... Applied`, tags `chaos,dynamo-lab`). Closes
+  the annotation-bridge + chaos-monkey open items. (The bridge needs a `chaos-annotation-bridge
+  -grafana` secret; created from the Grafana admin creds.)
+- **Track G re-check** — the operator renders `mocker-grove` as a Grove `PodCliqueSet`; KAI schedules
+  the gang (`schedulerName: kai-scheduler`, queue `default-queue` — the gotcha fix holds). New
+  findings: **(a)** with `mocker-disagg` also running, the 6-worker grove gang was **gang-blocked
+  Pending** on the single `workers` node — and **Karpenter did NOT provision more nodes for the
+  KAI-scheduled gang**; it only placed (all 8 at once) once `mocker-disagg` was deleted and freed
+  CPU. So Karpenter × KAI gang autoscaling does not cooperate out of the box — a real Track G
+  limitation. **(b)** Grove-alpha **status quirk**: the DGD reports `READY: False` / PodCliqueSet
+  `AVAILABLE 0` even with all 8 pods Running. **(c)** the **KAI/Grove metrics scrape is empty**
+  (0 of 54 Prometheus targets) — needs KAI `prometheus` enabled + the real port names, exactly as
+  `podmonitor-grove.yaml`'s `# VERIFY` flagged.
+
+Teardown via `FORCE=1 make down` → verified `$0` idle.
 
 ## Outstanding — after the first live `make up`
 
@@ -333,11 +359,19 @@ real-cost experiment that breaks `$0` idle. It gets its own ADR + GPU node class
 
 ## Known limitations
 
-- Deployed + validated on EKS 1.36 (agg + disagg fleets serve; planner autoscaling loop runs; k6
-  spike to 300 VUs with 0 errors). Chaos (experiment A) is the one headline experiment not yet run.
-- The fleet manifests were migrated `v1alpha1` → **`v1beta1`** (schema rewrite, primary-source
-  verified) but are **NOT live-validated** — the live EKS 1.36 run used the `v1alpha1` form. See the
-  v1beta1-migration note above; the next `make up` validates it, and rollback is a one-file revert.
+- **Fully live-validated on EKS 1.36** (2026-07-31, Live session 2): all three A/B/C experiments
+  (chaos self-heal + monkey + annotation bridge; planner autoscaling loop; k6 spike 300 VUs / 0
+  errors), the **v1beta1** fleets (agg + disagg + grove-scale all reconcile to DGD `Ready`), and
+  the grove-aware `make down`. Runs on the merged `main`.
+- **Track G: Karpenter × KAI gang autoscaling does not cooperate.** A gang-blocked, KAI-scheduled
+  grove gang did **not** trigger Karpenter to add nodes (Karpenter provisions for kube-scheduler's
+  unschedulable pods, not KAI's). The gang only placed once other workloads freed `workers`-pool
+  capacity. If a gang needs more than the existing `workers` capacity, it can stay `Pending`
+  indefinitely — pre-scale the pool or run one Grove fleet at a time.
+- **Track G: KAI/Grove-internal metrics are not scraped** out of the box (0 Prometheus targets) —
+  needs KAI `prometheus` enabled + the real metrics port names (see `podmonitor-grove.yaml`
+  `# VERIFY`). The dashboard's kube-state-metrics panels work regardless. Also, Grove (alpha)
+  under-reports DGD/PodCliqueSet status (`READY: False` with all pods Running).
 - Trace→logs correlation (Tempo→Loki `service_name`) is PLAUSIBLE-only until verified live; note the
   OTLP-logs exporter also logs a cosmetic `127.0.0.1:4317` connection error (logs ship via promtail).
 - The chaos annotation bridge installs its Python deps at pod start (no custom image); fine for
