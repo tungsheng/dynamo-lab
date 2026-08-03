@@ -70,10 +70,15 @@ if aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" >/dev/null
    && aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$REGION" >/dev/null 2>&1; then
   log "cleaning in-cluster workloads before destroy (best-effort)"
 
-  # 2. Remove the fleet (both profiles) so any LoadBalancer Services release their ELBs and no
-  #    worker pods remain that would keep Karpenter nodes busy.
-  "$SCRIPTS_DIR/fleet.sh" down agg    >/dev/null 2>&1 || true
-  "$SCRIPTS_DIR/fleet.sh" down disagg >/dev/null 2>&1 || true
+  # 2. Remove ALL fleets — every DynamoGraphDeployment, ANY profile (agg / disagg / grove-scale /
+  #    future) — so no worker pods keep the Karpenter nodes busy. A leftover fleet blocks the
+  #    NodePool delete in step 3: the worker node cannot drain, and the WHOLE teardown hangs.
+  #    Delete the DGDs while the operator (and Grove, for Track G) is still running so their
+  #    finalizers clear. Enumerating only agg/disagg missed the Track G `grove-scale` fleet and
+  #    hung the teardown for 33 min (live-diagnosed 2026-07-31). `--timeout` bounds a stuck
+  #    finalizer so a slow delete can't wedge the teardown either.
+  kubectl delete dynamographdeployment --all -n "$NS_DYNAMO" \
+    --ignore-not-found --timeout=120s >/dev/null 2>&1 || true
 
   # 3. Remove the platform helm releases (etcd, NATS, operator, observability, chaos-mesh).
   "$SCRIPTS_DIR/platform.sh" down >/dev/null 2>&1 || true

@@ -40,9 +40,11 @@ spec:
     selector:
       namespaces:
         - dynamo
-      labelSelectors:
-        # VERIFY: operator component-type label contract
-        nvidia.com/dynamo-component-type: worker
+      # Live-verified 2026-07-31 (v1beta1): no component-type=worker pods; match any worker pool
+      # (prefill+decode) by the worker-hash label (Exists — its value is a per-deploy hash).
+      expressionSelectors:
+        - key: nvidia.com/dynamo-worker-hash
+          operator: Exists
 ---
 # Every 30 min: kill a random coordination-plane pod (etcd OR nats — expression selector
 # matches both app names; mode:one picks one victim across the combined set).
@@ -107,9 +109,10 @@ spec:
       selector:
         namespaces:
           - dynamo
-        labelSelectors:
-          # VERIFY: operator component-type label contract
-          nvidia.com/dynamo-component-type: worker
+        # Live-verified 2026-07-31 (v1beta1): any worker pool (prefill+decode) via worker-hash Exists.
+        expressionSelectors:
+          - key: nvidia.com/dynamo-worker-hash
+            operator: Exists
     delay:
       latency: "150ms"
       correlation: "50"
@@ -138,8 +141,10 @@ spec:
     selector:
       namespaces:
         - dynamo
-      labelSelectors:
-        nvidia.com/dynamo-component-type: worker
+      # Live-verified 2026-07-31 (v1beta1): any worker pool (prefill+decode) via worker-hash Exists.
+      expressionSelectors:
+        - key: nvidia.com/dynamo-worker-hash
+          operator: Exists
     target:
       mode: all
       selector:
