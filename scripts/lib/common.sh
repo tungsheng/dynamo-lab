@@ -30,6 +30,8 @@ PLATFORM_DIR="${REPO_ROOT}/platform"
 FLEET_DIR="${REPO_ROOT}/fleet"
 CHAOS_DIR="${REPO_ROOT}/chaos"
 LOAD_DIR="${REPO_ROOT}/load"
+# Benchmarks tree (opt-in; ADR 0010). The first unit is benchmarks/router/.
+BENCH_DIR="${REPO_ROOT}/benchmarks"
 
 # --------------------------------------------------------------------------
 # Core AWS / cluster settings (all overridable)
@@ -133,7 +135,9 @@ TF_STATE_KEY="main/terraform.tfstate"
 # block uses distinct ${K6_*} tokens so envsubst never rewrites the identical
 # ${PROFILE}/${FRONTEND_URL}/${MODEL} JavaScript template literals in the embedded
 # k6 script (those are resolved by the k6 runtime from __ENV, not at render time).
-RENDER_VARS='${CLUSTER_NAME} ${DYNAMO_VERSION} ${K6_PROFILE} ${K6_FRONTEND_URL} ${KARPENTER_NODE_ROLE}'
+# ${BENCH_ARM}/${BENCH_FRONTEND_URL} are the router-benchmark tokens (scripts/bench.sh,
+# benchmarks/router/*), kept distinct from the ${K6_*} tokens for the same reason.
+RENDER_VARS='${CLUSTER_NAME} ${DYNAMO_VERSION} ${K6_PROFILE} ${K6_FRONTEND_URL} ${KARPENTER_NODE_ROLE} ${BENCH_ARM} ${BENCH_FRONTEND_URL}'
 
 # --------------------------------------------------------------------------
 # Logging helpers

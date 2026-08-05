@@ -27,6 +27,7 @@ S := scripts
 .PHONY: help up down bootstrap kubeconfig infra-up infra-down \
         platform-up platform-down fleet-up fleet-down \
         chaos-start chaos-stop load-start load-stop dashboards pause resume \
+        bench-router-up bench-router-run bench-router-down \
         track-g-up track-g-down
 
 help: ## Show this help
@@ -81,6 +82,16 @@ load-start: ## Run k6 (PROFILE=baseline|ramp|spike|sustained|soak default spike;
 
 load-stop: ## Stop the k6 load job
 	@$(S)/load.sh stop "$(or $(PROFILE),spike)"
+
+# --- Benchmarks (opt-in; ADR 0010) ---------------------------------------
+bench-router-up: ## Router benchmark: deploy a fixed disagg fleet under one policy (ARM=kv|kv-predict|session|round-robin|load-aware, default kv)
+	@$(S)/bench.sh up "$(or $(ARM),kv)"
+
+bench-router-run: ## Router benchmark: replay the agentic trace with aiperf against the ARM fleet
+	@$(S)/bench.sh run "$(or $(ARM),kv)"
+
+bench-router-down: ## Router benchmark: remove the ARM benchmark fleet
+	@$(S)/bench.sh down "$(or $(ARM),kv)"
 
 # --- Track G (Grove gang-scheduling, GPU-free, opt-in) --------------------
 track-g-up: ## Track G: install Grove+KAI, enable on the operator, deploy the grove-scale fleet
