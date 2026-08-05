@@ -54,18 +54,16 @@ def main() -> int:
         print(f"no profile_export_aiperf.json under {args.results_dir}/*/", file=sys.stderr)
         return 1
 
+    def fmt(v):
+        return f"{v:.1f}" if isinstance(v, (int, float)) else "n/a"
+
     header = ["arm"] + [label for _, label in METRICS]
     print("  ".join(f"{h:>18}" for h in header))
     for run in runs:
         export = json.loads(
             (args.results_dir / run / "profile_export_aiperf.json").read_text()
         )
-        row = [run] + [
-            f"{load_stat(export, key, args.stat):.1f}"
-            if isinstance(load_stat(export, key, args.stat), (int, float))
-            else "n/a"
-            for key, _ in METRICS
-        ]
+        row = [run] + [fmt(load_stat(export, key, args.stat)) for key, _ in METRICS]
         print("  ".join(f"{c:>18}" for c in row))
 
     print("\nRead kv-credit-* vs session: if a high-credit kv row matches session on TTFT,")

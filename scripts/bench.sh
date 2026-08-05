@@ -18,7 +18,7 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-require_cmd kubectl envsubst yq
+require_cmd kubectl envsubst awk
 
 ACTION="${1:-}"
 ARM="${2:-${BENCH_ARM:-kv}}"
@@ -40,41 +40,65 @@ bench_frontend_url() {
   printf 'http://%s-frontend.%s.svc.cluster.local:8000' "$(bench_arm_dgd "$1")" "$NS_DYNAMO"
 }
 
-# router_env_json <arm> — the Frontend router env entries this arm ADDS, as a JSON array
-# yq appends to the Frontend container's env. Only the flags an arm needs are added (no
-# disable sentinels), so each arm's config stays clean. The README's arm table mirrors this.
-# VERIFY (live, against the pinned Dynamo release): the env var NAMES below, and that a
-# shipped default (unset) disables session-affinity / predicted-ttl / load-aware.
-router_env_json() {
+# bench_env_entry <name> <value> — one YAML env entry indented to the Frontend env sequence
+# in fleet-base.yaml. The 16/18-space indent MUST match that file's env list (kept in lockstep
+# with the __BENCH_ROUTER_ENV__ marker there).
+bench_env_entry() { printf '                - name: %s\n                  value: "%s"\n' "$1" "$2"; }
+
+# router_env_yaml <arm> — the Frontend router env this arm sets, as a YAML block that replaces
+# the __BENCH_ROUTER_ENV__ marker in fleet-base.yaml. Only the flags an arm needs are emitted
+# (no disable sentinels), so each arm's config stays clean — in particular the kv arm carries NO
+# session-affinity env, which is what makes the kv-vs-session comparison honest. The README arm
+# table mirrors this. VERIFY (live, against the pinned Dynamo release): the env var NAMES below,
+# and that a shipped default (unset) disables session-affinity / predicted-ttl / load-aware.
+router_env_yaml() {
   local arm="$1"
-  local kv='{"name":"DYN_ROUTER_MODE","value":"kv"}'
-  local rr='{"name":"DYN_ROUTER_MODE","value":"round-robin"}'
-  local credit='{"name":"DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT","value":"'"${BENCH_OVERLAP_CREDIT}"'"}'
   case "$arm" in
-    kv)          printf '[%s,%s]' "$kv" "$credit" ;;
-    kv-predict)  printf '[%s,%s,%s]' "$kv" "$credit" \
-                   '{"name":"DYN_ROUTER_PREDICTED_TTL_SECS","value":"'"${BENCH_PREDICTED_TTL}"'"}' ;;
-    session)     printf '[%s,%s,%s]' "$kv" "$credit" \
-                   '{"name":"DYN_ROUTER_SESSION_AFFINITY_TTL_SECS","value":"'"${BENCH_SESSION_TTL}"'"}' ;;
-    round-robin) printf '[%s]' "$rr" ;;
-    load-aware)  printf '[%s,%s]' "$kv" '{"name":"DYN_ROUTER_LOAD_AWARE","value":"true"}' ;;
+    kv)
+      bench_env_entry DYN_ROUTER_MODE kv
+      bench_env_entry DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT "$BENCH_OVERLAP_CREDIT" ;;
+    kv-predict)
+      bench_env_entry DYN_ROUTER_MODE kv
+      bench_env_entry DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT "$BENCH_OVERLAP_CREDIT"
+      bench_env_entry DYN_ROUTER_PREDICTED_TTL_SECS "$BENCH_PREDICTED_TTL" ;;
+    session)
+      bench_env_entry DYN_ROUTER_MODE kv
+      bench_env_entry DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT "$BENCH_OVERLAP_CREDIT"
+      bench_env_entry DYN_ROUTER_SESSION_AFFINITY_TTL_SECS "$BENCH_SESSION_TTL" ;;
+    round-robin)
+      bench_env_entry DYN_ROUTER_MODE round-robin ;;
+    load-aware)
+      bench_env_entry DYN_ROUTER_MODE kv
+      bench_env_entry DYN_ROUTER_LOAD_AWARE true ;;
     *) die "unknown arm '$arm' (expected: kv|kv-predict|session|round-robin|load-aware)" ;;
   esac
 }
 
+# inject_router_env <arm> — filter stdin, replacing the __BENCH_ROUTER_ENV__ marker line with the
+# arm's router env block. Passed via the environment (not awk -v) so embedded newlines survive.
+inject_router_env() {
+  BENCH_ROUTER_ENV="$(router_env_yaml "$1")" \
+    awk '/__BENCH_ROUTER_ENV__/ { print ENVIRON["BENCH_ROUTER_ENV"]; next } { print }'
+}
+
 fleet_up() {
-  local arm="$1" env_json expr
+  local arm="$1" base rendered markers
   ensure_kubeconfig
   ensure_namespace "$NS_DYNAMO"
   [[ -f "$FLEET_BASE" ]] || die "fleet base manifest not found: ${FLEET_BASE}"
-  env_json="$(router_env_json "$arm")"
   BENCH_ARM="$arm"
   export BENCH_ARM DYNAMO_VERSION
-  # Append the arm's router env onto the Frontend container. VERIFY the yq path against a
-  # rendered manifest before the first live run (v1beta1 spec.components[].podTemplate...).
-  expr="(.spec.components[] | select(.name == \"Frontend\") | .podTemplate.spec.containers[] | select(.name == \"main\") | .env) += ${env_json}"
   step "Bench fleet up (arm=${arm}, dgd=$(bench_arm_dgd "$arm"), credit=${BENCH_OVERLAP_CREDIT})"
-  render < "$FLEET_BASE" | yq "$expr" | kubectl apply -f -
+  # Render the ARM/version tokens, then splice the arm's router policy into the marker line. The
+  # marker MUST appear exactly once: 0 means it was lost (Frontend would silently fall back to the
+  # default router mode); >1 means the token leaked into prose and the block would land in the
+  # wrong place (invalid YAML). Fail loud on either rather than apply something malformed.
+  base="$(render < "$FLEET_BASE")"
+  markers="$(grep -c '__BENCH_ROUTER_ENV__' <<<"$base" || true)"
+  [[ "$markers" == "1" ]] \
+    || die "expected exactly one __BENCH_ROUTER_ENV__ marker in ${FLEET_BASE}, found ${markers}"
+  rendered="$(inject_router_env "$arm" <<<"$base")"
+  printf '%s\n' "$rendered" | kubectl apply -f -
   log "waiting for the benchmark fleet to become Ready..."
   kubectl -n "$NS_DYNAMO" wait --for=condition=Ready \
     dynamographdeployment "$(bench_arm_dgd "$arm")" --timeout=600s >/dev/null 2>&1 \

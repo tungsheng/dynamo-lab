@@ -5,16 +5,17 @@
 #      moving part. A planner scaling pods mid-run would confound the TTFT comparison.
 #   2. prefill + decode replicas RAISED to 4 — the router needs several workers to choose
 #      among, or "which worker" is not a real decision and every policy looks identical.
-#   3. Frontend carries NO DYN_ROUTER_MODE here — scripts/bench.sh appends the per-arm router
-#      env (mode + overlap-score-credit + optional session/predict/load-aware) via yq, so one
-#      base serves every arm. The DGD name/labels carry ${BENCH_ARM} for cold, isolated arms.
+#   3. Frontend carries NO DYN_ROUTER_MODE here — scripts/bench.sh replaces the single router-env
+#      marker line with the per-arm router env (mode + overlap-score-credit + optional
+#      session/predict/load-aware), so one base serves every arm. The DGD name/labels carry the
+#      per-arm BENCH_ARM token for cold, isolated arms.
 #
 # The mocker keeps prefix caching ON (its default) and a FINITE --speedup-ratio: a cache hit
 # shrinks effective prefill ISL and still yields a real, wall-clock-compressed TTFT delta.
 # --speedup-ratio 0 (infinite speedup / no delays) would erase the very signal we measure.
 #
-# Rendered by scripts/bench.sh: envsubst expands ${BENCH_ARM}/${DYNAMO_VERSION}, then yq
-# appends the arm's router env onto the Frontend container.
+# Rendered by scripts/bench.sh: envsubst expands the BENCH_ARM and DYNAMO_VERSION tokens, then the
+# single router-env marker line is replaced with the arm's router env entries (awk, no new deps).
 apiVersion: nvidia.com/v1beta1
 kind: DynamoGraphDeployment
 metadata:
@@ -49,9 +50,11 @@ spec:
                 - containerPort: 8081
                   name: metrics
               env:
-                # Router env (DYN_ROUTER_MODE + policy flags) is appended per-arm by bench.sh.
+                # scripts/bench.sh replaces the marker line below with this arm's router policy
+                # (DYN_ROUTER_MODE + overlap-score-credit + optional session/predict/load-aware).
                 # VERIFY: align the router KV block size with the mocker --block-size below
                 # (DYN_KV_CACHE_BLOCK_SIZE) so prefix-overlap accounting matches the workers.
+                # __BENCH_ROUTER_ENV__  (replaced per-arm; keep this marker line unique)
                 - name: DYN_SYSTEM_PORT
                   value: "8081"
                 - name: ETCD_ENDPOINTS

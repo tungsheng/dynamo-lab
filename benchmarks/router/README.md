@@ -7,7 +7,7 @@ traffic, and **how much raising the KV-overlap cost weight closes the gap**. GPU
 **mocker**; the routing decisions are the real Dynamo code path.
 
 > This is a **scaffold**. The structure, arms, and wiring are in place; items marked `VERIFY`
-> (the aiperf invocation, trace fetch, runner image, results collection, the yq path) are pinned
+> (the aiperf invocation, trace fetch, runner image, and results collection) are pinned
 > on the first live run. It reuses Dynamo's upstream `benchmarks/router/` harness (aiperf +
 > `agent_benchmark.py` + the Mooncake FAST'25 toolagent trace) — the one thing that harness lacks
 > is the **session arm**, which is this benchmark's contribution.
@@ -15,7 +15,8 @@ traffic, and **how much raising the KV-overlap cost weight closes the gap**. GPU
 ## The arms
 
 Each arm is the same fixed fleet with a different Frontend router policy. `scripts/bench.sh`
-appends the arm's router env onto the Frontend; the table below mirrors `router_env_json()` there.
+splices the arm's router env into the Frontend (replacing the `__BENCH_ROUTER_ENV__` marker in
+`fleet-base.yaml`); the table below mirrors `router_env_yaml()` there.
 
 | Arm | Router env it sets | Question |
 |-----|--------------------|----------|
