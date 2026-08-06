@@ -1,14 +1,20 @@
 # benchmarks/router :: aiperf-job — replay the agentic trace against ONE arm's Frontend
 #
-# In-cluster aiperf run (the ADR 0005 "realistic benchmark mode"), modeled on
-# load/k6-job.yaml. It replays a session-grouped, shared-prefix agentic trace at fixed
-# concurrency against the arm's Frontend and writes aiperf's TTFT/TPOT/ITL/E2EL export.
-# scripts/bench.sh renders ${BENCH_ARM}/${BENCH_FRONTEND_URL} via envsubst before apply.
+# In-cluster aiperf run (the ADR 0005 "realistic benchmark mode"). Replays the Mooncake
+# FAST'25 toolagent trace against the arm's Frontend and prints aiperf's TTFT/TPOT/ITL/E2EL
+# export to stdout for collection. scripts/bench.sh renders ${BENCH_ARM}/${BENCH_FRONTEND_URL}
+# via envsubst before apply.
 #
-# This is a SCAFFOLD: the pieces marked VERIFY are the ones to pin on the first live run —
-# the runner image, the exact aiperf/agent_benchmark.py invocation, the trace source, and
-# how the profile_export_aiperf.json is collected. Reuse Dynamo's upstream benchmarks/router/
-# harness (agent_benchmark.py + the Mooncake FAST'25 toolagent trace) rather than reinventing.
+# Pinned to the primary sources (Dynamo v1.3.0 benchmarks/router): aiperf==0.10.0, the
+# `aiperf profile ... --custom-dataset-type mooncake_trace` form, and the toolagent trace.
+# We call `aiperf profile` DIRECTLY (not agent_benchmark.py) so the only dependency is aiperf
+# itself — agent_benchmark.py additionally needs the data-generator package installed.
+# Validated live 2026-08-06: this Job runs end-to-end and emits profile_export_aiperf.json.
+#
+# NOTE on the trace: the toolagent trace rows are {timestamp, input_length, output_length,
+# hash_ids} — shared prefixes via hash_ids, but NO session_id, so this is single-turn
+# shared-prefix load (concurrency mode), not multi-turn sessions. That exercises kv-overlap vs
+# cache-blind routing; the session-affinity arm needs a session_id-carrying trace (see README).
 ---
 apiVersion: batch/v1
 kind: Job
@@ -31,65 +37,67 @@ spec:
         dynamo-lab/arm: "${BENCH_ARM}"
     spec:
       restartPolicy: Never
-      # VERIFY: fetch benchmarks/router/ (agent_benchmark.py) + the Mooncake FAST'25 toolagent
-      # trace into /work. Pin the Dynamo ref to DYNAMO_VERSION and the trace to a known commit.
-      # Alternatives: bake a benchmark image, or mount a pre-fetched trace from a PVC/ConfigMap.
-      initContainers:
-        - name: fetch-harness
-          image: alpine/git:latest   # VERIFY: pin a digest/tag you trust
-          command:
-            - sh
-            - -c
-            - |
-              set -eu
-              echo "VERIFY: clone ai-dynamo/dynamo @ v${DYNAMO_VERSION} -> /work/dynamo (benchmarks/router/)"
-              echo "VERIFY: fetch Mooncake FAST'25 toolagent_trace.jsonl -> /work/trace.jsonl"
-              # git clone --depth 1 --branch "v${DYNAMO_VERSION}" https://github.com/ai-dynamo/dynamo /work/dynamo
-              # wget -O /work/trace.jsonl <mooncake toolagent_trace.jsonl raw URL>
-          volumeMounts:
-            - name: work
-              mountPath: /work
       containers:
         - name: aiperf
-          # VERIFY: an image that carries aiperf + benchmarks/router/agent_benchmark.py. The
-          # dynamo runtime image may already; otherwise pip install aiperf into a python base.
-          image: nvcr.io/nvidia/ai-dynamo/dynamo-planner:${DYNAMO_VERSION}
+          # Validated live 2026-08-06: python:3.12-slim + pip install aiperf==0.10.0 works (adds
+          # ~90s startup). No published image is confirmed to bundle aiperf; bake one to skip pip.
+          image: python:3.12-slim
           imagePullPolicy: IfNotPresent
-          workingDir: /work
-          command:
-            - sh
-            - -c
-            - |
-              set -eu
-              echo "arm=${BENCH_ARM} target=$FRONTEND_URL model=$MODEL conc=$CONCURRENCY"
-              # VERIFY (live): the exact upstream invocation. Sketch:
-              #   python3 /work/dynamo/benchmarks/router/agent_benchmark.py \
-              #     --url "$FRONTEND_URL" --model "$MODEL" \
-              #     --trace /work/trace.jsonl --concurrency "$CONCURRENCY" \
-              #     --artifact-dir /work/out
-              # aiperf writes profile_export_aiperf.json (TTFT/TPOT/ITL/E2EL) under the artifact dir.
-              echo "VERIFY: run agent_benchmark.py (aiperf) and emit /work/out/profile_export_aiperf.json"
           env:
-            - name: FRONTEND_URL
+            - name: ARM
+              value: "${BENCH_ARM}"
+            - name: FRONTEND_URL             # aiperf --url takes the BASE url (no /v1)
               value: "${BENCH_FRONTEND_URL}"
             - name: MODEL
               value: "Qwen/Qwen3-0.6B"
-            # Fixed concurrency point. Sweep by running the arm at several values and clearing
-            # KV state between points (a fresh fleet per run already does this — see README).
+            - name: TRACE_URL
+              value: "https://raw.githubusercontent.com/kvcache-ai/Mooncake/d21da178bae8db9651cf18a76824c084145fc725/FAST25-release/traces/toolagent_trace.jsonl"
             - name: CONCURRENCY
               value: "32"
+            # Bound the run so an arm finishes in minutes (the full trace is 23,608 rows). Concurrency
+            # mode ignores timestamps; prefix reuse still happens via repeated hash_ids.
+            - name: REQUEST_COUNT
+              value: "2000"
+            # Rows loaded from the trace. aiperf materializes the WHOLE dataset in memory before
+            # --request-count applies, so the full 23,608-row trace OOMs a small pod (live finding
+            # 2026-08-06). Subset to bound memory; a contiguous head preserves hash_ids prefix reuse.
+            - name: TRACE_ROWS
+              value: "2000"
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              echo "[aiperf-bench arm=$ARM] pip install aiperf==0.10.0"
+              pip install --quiet --no-cache-dir aiperf==0.10.0
+              echo "[aiperf-bench] fetch trace: $TRACE_URL"
+              python -c "import urllib.request,os; urllib.request.urlretrieve(os.environ['TRACE_URL'], '/work/trace.jsonl')"
+              # Subset to TRACE_ROWS so aiperf doesn't materialize all 23,608 rows in memory (OOM).
+              head -n "$TRACE_ROWS" /work/trace.jsonl > /work/trace.subset.jsonl
+              echo "[aiperf-bench] using $(wc -l < /work/trace.subset.jsonl) trace rows"
+              echo "[aiperf-bench] run vs $FRONTEND_URL (concurrency=$CONCURRENCY count=$REQUEST_COUNT)"
+              aiperf profile \
+                --model "$MODEL" --tokenizer "$MODEL" --url "$FRONTEND_URL" \
+                --endpoint-type chat --streaming \
+                --input-file /work/trace.subset.jsonl --custom-dataset-type mooncake_trace \
+                --concurrency "$CONCURRENCY" --request-count "$REQUEST_COUNT" --random-seed 0 \
+                --artifact-dir /work/out --extra-inputs ignore_eos:true --no-gpu-telemetry
+              # Emit the export to stdout so `kubectl logs` collects it (the pod is gone after ttl,
+              # so kubectl cp is unavailable). scripts/bench.sh slices between these markers.
+              echo "===AIPERF-JSON-BEGIN==="
+              cat /work/out/profile_export_aiperf.json
+              echo "===AIPERF-JSON-END==="
           resources:
             requests:
-              cpu: "250m"
-              memory: 512Mi
+              cpu: "500m"
+              memory: 1Gi
             limits:
               cpu: "2"
-              memory: 2Gi
+              # 4Gi headroom: aiperf holds the (subset) dataset + tokenized prompts in memory.
+              memory: 4Gi
           volumeMounts:
             - name: work
               mountPath: /work
-      # VERIFY: collect /work/out/profile_export_aiperf.json off the pod (kubectl cp, or write
-      # to a PVC/S3) into results/<arm>[/credit] for benchmarks/router/analysis/compare.py.
       volumes:
         - name: work
           emptyDir: {}

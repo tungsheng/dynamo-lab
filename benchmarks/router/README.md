@@ -6,11 +6,47 @@ KV-aware router underperforms session (sticky) routing** on agentic — multi-tu
 traffic, and **how much raising the KV-overlap cost weight closes the gap**. GPU-free on the
 **mocker**; the routing decisions are the real Dynamo code path.
 
-> This is a **scaffold**. The structure, arms, and wiring are in place; items marked `VERIFY`
-> (the aiperf invocation, trace fetch, runner image, and results collection) are pinned
-> on the first live run. It reuses Dynamo's upstream `benchmarks/router/` harness (aiperf +
-> `agent_benchmark.py` + the Mooncake FAST'25 toolagent trace) — the one thing that harness lacks
-> is the **session arm**, which is this benchmark's contribution.
+> **Validated live on EKS 2026-08-06** — the harness runs end-to-end (fleet Ready → router-env
+> injection → aiperf trace replay → export collected). The first run's key result (no routing signal
+> yet) and the follow-ups to make it discriminating are in **[Live findings](#live-findings-first-run-2026-08-06)**
+> below. It uses Dynamo's upstream aiperf form (`aiperf==0.10.0`, `aiperf profile
+> --custom-dataset-type mooncake_trace`) against the Mooncake FAST'25 toolagent trace; the **session
+> arm** (this benchmark's intended contribution) is blocked on a session-grouped trace — see below.
+
+## Live findings (first run, 2026-08-06)
+
+**The harness works end-to-end but is not yet *discriminating*** — on the stock trace/config the
+routing policy made no measurable TTFT difference.
+
+- **Pipeline validated.** `make bench-router-up ARM=kv` → DGD Ready; the awk-injected router env
+  lands in the Frontend (`DYN_ROUTER_MODE=kv`, `DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT`); the KV router
+  activates; the aiperf Job replays the trace and emits `profile_export_aiperf.json`.
+- **aiperf pinned:** `aiperf==0.10.0`, `aiperf profile ... --custom-dataset-type mooncake_trace` on a
+  `python:3.12-slim` + pip base. aiperf materializes the whole trace before `--request-count`, so the
+  full 23,608-row trace **OOMs** — the Job subsets to `TRACE_ROWS`. Export metrics are top-level keys
+  (`time_to_first_token`, `inter_token_latency`, `request_latency`; **no** `time_per_output_token`).
+- **No-signal result** (2000 reqs, concurrency 32, cold fleet per arm):
+
+  | arm | TTFT avg | TTFT p99 | E2EL avg | req/s |
+  |---|---|---|---|---|
+  | kv-credit-1 | 312 ms | 674 ms | 441 ms | 5.9 |
+  | round-robin | 296 ms | 687 ms | 424 ms | 5.9 |
+  | load-aware  | 304 ms | 686 ms | 430 ms | 5.9 |
+
+  Duration and throughput were identical too, and cache-blind **round-robin was marginally lowest** —
+  the router is not exploiting prefix locality on this config.
+- **kv-credit-4 blocked** by an operator delete-recreate race (a rapidly recreated same-name DGD came
+  up `Ready=False` with 0 pods; distinct-named arms were unaffected).
+
+**To make it discriminating (follow-ups, priority order):**
+1. **`--router-predicted-ttl-secs`** (the `kv-predict` arm) — at concurrency 32 the batch-of-siblings
+   race makes kv scatter co-arriving shared-prefix requests like round-robin. Most likely cause.
+2. **Block-size alignment** — set the mocker `--block-size` and Frontend `--kv-cache-block-size` to
+   match so trace prefixes map to credited overlap (currently unaligned defaults).
+3. **Mocker cache→TTFT sensitivity** — confirm a prefix hit actually lowers simulated TTFT at
+   `--speedup-ratio 10` (try a lower ratio / different profile data).
+4. **Trace** — a higher-reuse or `session_id`-carrying trace (see the session note below).
+5. **Sweep methodology** — give each run a distinct DGD name to avoid the same-name recreate race.
 
 ## The arms
 

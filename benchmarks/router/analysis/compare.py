@@ -25,22 +25,26 @@ import json
 import sys
 from pathlib import Path
 
-# VERIFY (live): the exact aiperf JSON schema. aiperf reports per-metric stats (avg/p50/p90/
-# p99). Adjust these key paths to match profile_export_aiperf.json from the pinned aiperf.
+# Confirmed against aiperf 0.10.0's profile_export_aiperf.json (live 2026-08-06): each metric is a
+# TOP-LEVEL key -> {unit, avg, p50, p90, p95, p99, min, max, std, count}. There is NO
+# `time_per_output_token` key — aiperf reports per-token cost as `inter_token_latency`; throughput
+# metrics carry only `avg`.
 METRICS = [
     ("time_to_first_token", "TTFT ms"),
     ("inter_token_latency", "ITL ms"),
-    ("time_per_output_token", "TPOT ms"),
     ("request_latency", "E2EL ms"),
+    ("request_throughput", "req/s"),
 ]
 
 
 def load_stat(export: dict, key: str, stat: str = "avg"):
-    """Best-effort pull of one stat for one metric; tolerant of schema drift (VERIFY)."""
-    node = export.get("records", export).get(key) if isinstance(export, dict) else None
-    if isinstance(node, dict):
-        return node.get(stat, node.get("value"))
-    return None
+    """One stat for one metric. Metrics live at the top level; throughput metrics have only avg,
+    so fall back to avg when the requested percentile is absent."""
+    m = export.get(key) if isinstance(export, dict) else None
+    if not isinstance(m, dict):
+        return None
+    v = m.get(stat)
+    return v if v is not None else m.get("avg")
 
 
 def main() -> int:
@@ -66,8 +70,10 @@ def main() -> int:
         row = [run] + [fmt(load_stat(export, key, args.stat)) for key, _ in METRICS]
         print("  ".join(f"{c:>18}" for c in row))
 
-    print("\nRead kv-credit-* vs session: if a high-credit kv row matches session on TTFT,")
-    print("the hypothesis holds — overlap weight closes the prefill cache-locality gap (ADR 0010).")
+    print("\nCompare kv-credit-* vs the cache-blind floors (round-robin / load-aware): lower kv TTFT")
+    print("means the router is exploiting prefix locality, and raising overlap-credit should widen")
+    print("that gap (ADR 0010). If the rows are equal, routing is not yet discriminating — see the")
+    print("README live-findings note (block-size alignment, --router-predicted-ttl-secs).")
     return 0
 
 

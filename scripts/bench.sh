@@ -112,6 +112,11 @@ fleet_down() {
   step "Bench fleet down (arm=${arm})"
   kubectl -n "$NS_DYNAMO" delete dynamographdeployment "$(bench_arm_dgd "$arm")" \
     --ignore-not-found --timeout=300s || true
+  # Wait for the pods to actually clear before returning, so a follow-up `up` of the SAME name does
+  # not race the operator's teardown (live 2026-08-06: rapid same-name delete+recreate left the new
+  # DGD Ready=False with 0 pods). Prefer a DISTINCT arm/name per run for a clean cold fleet.
+  kubectl -n "$NS_DYNAMO" wait --for=delete pod -l "dynamo-lab/arm=${arm}" --timeout=180s \
+    >/dev/null 2>&1 || true
   ok "arm '${arm}' fleet removed"
 }
 
@@ -130,27 +135,56 @@ aiperf_run() {
   log "follow logs:  kubectl -n ${NS_LOAD} logs -f job/aiperf-bench-${arm}"
 }
 
-# sweep — the intended end-to-end orchestration: for each arm, stand up a cold fleet, run
-# aiperf, collect results, tear down; sweeping BENCH_CREDITS for the kv arm.
-# VERIFY (live): the block-until-complete + results-collection steps are marked TODO below.
-# Run a single arm end-to-end (make bench-router-up/run/down ARM=...) before sweeping.
+# wait_job <arm> — block until the arm's aiperf Job reports Complete or Failed (bounded).
+wait_job() {
+  local arm="$1" t
+  for _ in $(seq 1 200); do
+    t="$(kubectl get job "aiperf-bench-${arm}" -n "$NS_LOAD" -o jsonpath='{.status.conditions[*].type}' 2>/dev/null)"
+    case "$t" in
+      *Complete*) ok "aiperf-bench-${arm} complete"; return 0 ;;
+      *Failed*)   warn "aiperf-bench-${arm} failed"; return 1 ;;
+    esac
+    sleep 5
+  done
+  warn "aiperf-bench-${arm} did not finish within timeout"; return 1
+}
+
+# collect_arm <label> <arm> — pull the arm's aiperf export from the completed Job pod logs into
+# results/<label>/. The export prints between the AIPERF-JSON markers; the pod is gone after ttl (so
+# kubectl cp is out) and `kubectl logs | tail` truncates the JSON — take the FULL logs and slice.
+collect_arm() {
+  local label="$1" arm="$2" pod
+  pod="$(kubectl get pods -n "$NS_LOAD" -l "dynamo-lab/arm=${arm}" -o name | head -1)"
+  [[ -n "$pod" ]] || { warn "no aiperf pod for arm ${arm}"; return 1; }
+  mkdir -p "results/${label}"
+  kubectl logs -n "$NS_LOAD" "$pod" > "results/${label}/run.log" 2>&1
+  python3 -c 'import re,json,sys; log=open(sys.argv[1]).read(); m=re.search(r"===AIPERF-JSON-BEGIN===\s*(.*?)===AIPERF-JSON-END===",log,re.S); open(sys.argv[2],"w").write(json.dumps(json.loads(m.group(1).strip()),indent=2)) if m else sys.exit("no aiperf export markers")' \
+    "results/${label}/run.log" "results/${label}/profile_export_aiperf.json" \
+    && ok "collected results/${label}/profile_export_aiperf.json" || warn "no export extracted for ${label}"
+}
+
+# sweep — stand up a cold fleet per arm, run aiperf, collect, tear down. Sweeps BENCH_CREDITS on the
+# kv arm plus the cache-blind floors. NOTE (live 2026-08-06): the kv credit loop reuses the same DGD
+# name, which can hit an operator delete-recreate race (new DGD Ready=False, 0 pods) even with the
+# fleet_down wait; for a clean credit sweep run on a FRESH cluster or give each run a distinct name.
+# The `session` arm is omitted — it needs a session_id-carrying trace (the stock toolagent trace is
+# single-turn); see benchmarks/router/README.md.
 sweep() {
   local arm credit
   for credit in $BENCH_CREDITS; do
-    BENCH_OVERLAP_CREDIT="$credit"
-    export BENCH_OVERLAP_CREDIT
+    BENCH_OVERLAP_CREDIT="$credit"; export BENCH_OVERLAP_CREDIT
     fleet_up kv
     aiperf_run kv
-    warn "TODO(live): wait for job/aiperf-bench-kv to Complete, then copy profile_export_aiperf.json to results/kv-credit-${credit}/"
+    wait_job kv && collect_arm "kv-credit-${credit}" kv
     fleet_down kv
   done
-  for arm in session round-robin load-aware; do
+  for arm in round-robin load-aware; do
     fleet_up "$arm"
     aiperf_run "$arm"
-    warn "TODO(live): wait for job/aiperf-bench-${arm} to Complete, then copy profile_export_aiperf.json to results/${arm}/"
+    wait_job "$arm" && collect_arm "$arm" "$arm"
     fleet_down "$arm"
   done
-  log "compare with:  python3 ${BENCH_ROUTER_DIR}/analysis/compare.py results/"
+  log "compare:  python3 ${BENCH_ROUTER_DIR}/analysis/compare.py results/"
 }
 
 case "${ACTION}" in

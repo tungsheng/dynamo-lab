@@ -57,3 +57,14 @@ now aliases `prefill_load_scale`, a different lever — the live knob is `-credi
   cross-comparability; k6 single-turn prompts carry no shared-prefix signal); blocking v1 on #11875
   (not landed, and answers a *capability* question, not the *research* one); a real-GPU replay in
   this lab (breaks the `$0`-idle / GPU-free invariant).
+
+## Status
+
+**Live-validated on EKS 2026-08-06** — the pipeline runs end-to-end (fleet Ready → router-env
+injection → aiperf replay → export collected). The first sweep showed **no TTFT difference** between
+kv and cache-blind routing on the stock toolagent trace (concurrency 32, default block sizes, no
+predict-on-route): the harness works but is **not yet discriminating**. Two scope corrections also
+surfaced — the stock trace is single-turn shared-prefix (no `session_id`), so the **session arm is
+inert** without a session-grouped trace; and the mocker yields *relative* orderings, so absolute
+numbers still need the GPU tier. Causes + follow-ups (predict-on-route, block-size alignment, mocker
+cache fidelity, a session trace) are in `benchmarks/router/README.md` (Live findings) and PROGRESS.md.

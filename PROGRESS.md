@@ -265,6 +265,32 @@ on Helm 4, clean) re-ran everything on the merged `main`:
 
 Teardown via `FORCE=1 make down` → verified `$0` idle.
 
+**Live session — router benchmark first run (2026-08-06).** A full `make up` (EKS 1.36) + the new
+`benchmarks/router/` scaffold (ADR [0010](docs/adr/0010-router-benchmark-kv-vs-session.md)). Validated
+the deployed benchmark pipeline end-to-end and surfaced a no-signal result plus live fixes:
+
+- **Fleet + router-env:** `make bench-router-up ARM=kv` reconciled `mocker-bench-kv` (Frontend + 4
+  prefill + 4 decode, no planner) to Ready; the awk-injected per-arm router env landed in the live
+  Frontend (`DYN_ROUTER_MODE=kv`, `DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT`) and the KV router activated
+  ("router activated successfully"); `/v1/chat/completions` served 200.
+- **aiperf pinned:** `aiperf==0.10.0`, `aiperf profile --custom-dataset-type mooncake_trace` on
+  `python:3.12-slim`+pip. **Bug fixed live:** aiperf materializes the whole trace before
+  `--request-count`, OOMKilling a 2Gi pod on the 23,608-row trace — subset to `TRACE_ROWS` + 4Gi.
+  Confirmed the export schema (metrics are top-level keys; no `time_per_output_token`) and fixed
+  `analysis/compare.py` to match.
+- **Sweep result — NO SIGNAL:** kv-credit-1, round-robin, load-aware (2000 reqs, concurrency 32, a
+  cold fleet each) came out **identical** — TTFT ~300 ms, E2EL ~430 ms, 337 s, 5.9 rps — with
+  cache-blind round-robin marginally *lowest*. The router isn't exploiting prefix locality on this
+  config. Follow-ups: predict-on-route (`--router-predicted-ttl-secs`; the batch-of-siblings race at
+  concurrency), block-size alignment, mocker cache→TTFT sensitivity, a higher-reuse/session trace.
+- **Two methodology findings:** (a) the stock Mooncake toolagent trace is single-turn + shared-prefix
+  (no `session_id`), so the **session arm is inert** — the kv-vs-session headline needs a
+  session-grouped trace. (b) rapidly deleting+recreating the **same** DGD name races the operator (new
+  DGD `Ready=False`, 0 pods) — `kv-credit-4` was blocked; distinct-named arms were fine. `bench.sh`
+  now waits for pod deletion in `fleet_down` and documents preferring distinct names.
+
+Teardown via `FORCE=1 make down` → verified `$0` idle. On `feat/router-benchmark` (not yet merged).
+
 ## Outstanding — after the first live `make up`
 
 Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works
