@@ -1,0 +1,103 @@
+# benchmarks/router :: aiperf-job — replay the agentic trace against ONE arm's Frontend
+#
+# In-cluster aiperf run (the ADR 0005 "realistic benchmark mode"). Replays the Mooncake
+# FAST'25 toolagent trace against the arm's Frontend and prints aiperf's TTFT/TPOT/ITL/E2EL
+# export to stdout for collection. scripts/bench.sh renders ${BENCH_ARM}/${BENCH_FRONTEND_URL}
+# via envsubst before apply.
+#
+# Pinned to the primary sources (Dynamo v1.3.0 benchmarks/router): aiperf==0.10.0, the
+# `aiperf profile ... --custom-dataset-type mooncake_trace` form, and the toolagent trace.
+# We call `aiperf profile` DIRECTLY (not agent_benchmark.py) so the only dependency is aiperf
+# itself — agent_benchmark.py additionally needs the data-generator package installed.
+# Validated live 2026-08-06: this Job runs end-to-end and emits profile_export_aiperf.json.
+#
+# NOTE on the trace: the toolagent trace rows are {timestamp, input_length, output_length,
+# hash_ids} — shared prefixes via hash_ids, but NO session_id, so this is single-turn
+# shared-prefix load (concurrency mode), not multi-turn sessions. That exercises kv-overlap vs
+# cache-blind routing; the session-affinity arm needs a session_id-carrying trace (see README).
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aiperf-bench-${BENCH_ARM}
+  namespace: load
+  labels:
+    app.kubernetes.io/part-of: dynamo-lab
+    app.kubernetes.io/component: benchmark
+    dynamo-lab/benchmark: router
+    dynamo-lab/arm: "${BENCH_ARM}"
+spec:
+  backoffLimit: 0            # a benchmark run is not "retryable"; rerun via make bench-router-run
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: dynamo-lab
+        app.kubernetes.io/component: benchmark
+        dynamo-lab/arm: "${BENCH_ARM}"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: aiperf
+          # Validated live 2026-08-06: python:3.12-slim + pip install aiperf==0.10.0 works (adds
+          # ~90s startup). No published image is confirmed to bundle aiperf; bake one to skip pip.
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ARM
+              value: "${BENCH_ARM}"
+            - name: FRONTEND_URL             # aiperf --url takes the BASE url (no /v1)
+              value: "${BENCH_FRONTEND_URL}"
+            - name: MODEL
+              value: "Qwen/Qwen3-0.6B"
+            - name: TRACE_URL
+              value: "https://raw.githubusercontent.com/kvcache-ai/Mooncake/d21da178bae8db9651cf18a76824c084145fc725/FAST25-release/traces/toolagent_trace.jsonl"
+            - name: CONCURRENCY
+              value: "32"
+            # Bound the run so an arm finishes in minutes (the full trace is 23,608 rows). Concurrency
+            # mode ignores timestamps; prefix reuse still happens via repeated hash_ids.
+            - name: REQUEST_COUNT
+              value: "2000"
+            # Rows loaded from the trace. aiperf materializes the WHOLE dataset in memory before
+            # --request-count applies, so the full 23,608-row trace OOMs a small pod (live finding
+            # 2026-08-06). Subset to bound memory; a contiguous head preserves hash_ids prefix reuse.
+            - name: TRACE_ROWS
+              value: "2000"
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              echo "[aiperf-bench arm=$ARM] pip install aiperf==0.10.0"
+              pip install --quiet --no-cache-dir aiperf==0.10.0
+              echo "[aiperf-bench] fetch trace: $TRACE_URL"
+              python -c "import urllib.request,os; urllib.request.urlretrieve(os.environ['TRACE_URL'], '/work/trace.jsonl')"
+              # Subset to TRACE_ROWS so aiperf doesn't materialize all 23,608 rows in memory (OOM).
+              head -n "$TRACE_ROWS" /work/trace.jsonl > /work/trace.subset.jsonl
+              echo "[aiperf-bench] using $(wc -l < /work/trace.subset.jsonl) trace rows"
+              echo "[aiperf-bench] run vs $FRONTEND_URL (concurrency=$CONCURRENCY count=$REQUEST_COUNT)"
+              aiperf profile \
+                --model "$MODEL" --tokenizer "$MODEL" --url "$FRONTEND_URL" \
+                --endpoint-type chat --streaming \
+                --input-file /work/trace.subset.jsonl --custom-dataset-type mooncake_trace \
+                --concurrency "$CONCURRENCY" --request-count "$REQUEST_COUNT" --random-seed 0 \
+                --artifact-dir /work/out --extra-inputs ignore_eos:true --no-gpu-telemetry
+              # Emit the export to stdout so `kubectl logs` collects it (the pod is gone after ttl,
+              # so kubectl cp is unavailable). scripts/bench.sh slices between these markers.
+              echo "===AIPERF-JSON-BEGIN==="
+              cat /work/out/profile_export_aiperf.json
+              echo "===AIPERF-JSON-END==="
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              # 4Gi headroom: aiperf holds the (subset) dataset + tokenized prompts in memory.
+              memory: 4Gi
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: work
+          emptyDir: {}

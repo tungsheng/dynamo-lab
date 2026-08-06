@@ -38,6 +38,9 @@ venv/
 # --- Node / k6 auxiliary ---
 node_modules/
 
+# --- Benchmarks (aiperf run outputs) ---
+results/
+
 # --- Logs & scratch ---
 *.log
 tmp/
