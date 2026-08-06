@@ -11,10 +11,10 @@
 # itself — agent_benchmark.py additionally needs the data-generator package installed.
 # Validated live 2026-08-06: this Job runs end-to-end and emits profile_export_aiperf.json.
 #
-# NOTE on the trace: the toolagent trace rows are {timestamp, input_length, output_length,
-# hash_ids} — shared prefixes via hash_ids, but NO session_id, so this is single-turn
-# shared-prefix load (concurrency mode), not multi-turn sessions. That exercises kv-overlap vs
-# cache-blind routing; the session-affinity arm needs a session_id-carrying trace (see README).
+# TRACE_MODE=session (default) generates a session-grouped multi-turn trace via
+# make_session_trace.py (mounted from configmap bench-router-gen) so the session-affinity arm is
+# meaningful. TRACE_MODE=toolagent uses the fetched single-turn Mooncake trace (shared prefixes via
+# hash_ids, no session_id) — kv-overlap vs cache-blind only. See benchmarks/router/README.md.
 ---
 apiVersion: batch/v1
 kind: Job
@@ -54,13 +54,19 @@ spec:
               value: "https://raw.githubusercontent.com/kvcache-ai/Mooncake/d21da178bae8db9651cf18a76824c084145fc725/FAST25-release/traces/toolagent_trace.jsonl"
             - name: CONCURRENCY
               value: "32"
-            # Bound the run so an arm finishes in minutes (the full trace is 23,608 rows). Concurrency
-            # mode ignores timestamps; prefix reuse still happens via repeated hash_ids.
-            - name: REQUEST_COUNT
-              value: "2000"
-            # Rows loaded from the trace. aiperf materializes the WHOLE dataset in memory before
-            # --request-count applies, so the full 23,608-row trace OOMs a small pod (live finding
-            # 2026-08-06). Subset to bound memory; a contiguous head preserves hash_ids prefix reuse.
+            # TRACE_MODE: session (generated multi-turn sessions — the sticky/kv comparison) or
+            # toolagent (the fetched single-turn Mooncake trace). The follow-up defaults to session.
+            - name: TRACE_MODE
+              value: "session"
+            - name: SESSIONS
+              value: "200"
+            - name: TURNS
+              value: "5"
+            - name: DELAY_MS
+              value: "0"
+            # toolagent mode only: rows to load from the fetched trace. aiperf materializes the whole
+            # dataset in memory, so the full 23,608-row trace OOMs a small pod (live 2026-08-06) —
+            # subset to bound memory (a contiguous head preserves hash_ids prefix reuse).
             - name: TRACE_ROWS
               value: "2000"
           command:
@@ -68,19 +74,25 @@ spec:
             - -c
             - |
               set -eu
-              echo "[aiperf-bench arm=$ARM] pip install aiperf==0.10.0"
+              echo "[aiperf-bench arm=$ARM mode=$TRACE_MODE] pip install aiperf==0.10.0"
               pip install --quiet --no-cache-dir aiperf==0.10.0
-              echo "[aiperf-bench] fetch trace: $TRACE_URL"
-              python -c "import urllib.request,os; urllib.request.urlretrieve(os.environ['TRACE_URL'], '/work/trace.jsonl')"
-              # Subset to TRACE_ROWS so aiperf doesn't materialize all 23,608 rows in memory (OOM).
-              head -n "$TRACE_ROWS" /work/trace.jsonl > /work/trace.subset.jsonl
-              echo "[aiperf-bench] using $(wc -l < /work/trace.subset.jsonl) trace rows"
-              echo "[aiperf-bench] run vs $FRONTEND_URL (concurrency=$CONCURRENCY count=$REQUEST_COUNT)"
+              if [ "$TRACE_MODE" = session ]; then
+                echo "[aiperf-bench] generate session trace (sessions=$SESSIONS turns=$TURNS)"
+                python /gen/make_session_trace.py --sessions "$SESSIONS" --turns "$TURNS" \
+                  --delay-ms "$DELAY_MS" > /work/trace.jsonl
+              else
+                echo "[aiperf-bench] fetch + subset toolagent trace ($TRACE_ROWS rows)"
+                python -c "import urllib.request,os; urllib.request.urlretrieve(os.environ['TRACE_URL'], '/work/trace.raw.jsonl')"
+                head -n "$TRACE_ROWS" /work/trace.raw.jsonl > /work/trace.jsonl
+              fi
+              echo "[aiperf-bench] using $(wc -l < /work/trace.jsonl) trace rows"
+              echo "[aiperf-bench] run vs $FRONTEND_URL (concurrency=$CONCURRENCY)"
+              # No --request-count: aiperf sends the whole (already-bounded) trace file.
               aiperf profile \
                 --model "$MODEL" --tokenizer "$MODEL" --url "$FRONTEND_URL" \
                 --endpoint-type chat --streaming \
-                --input-file /work/trace.subset.jsonl --custom-dataset-type mooncake_trace \
-                --concurrency "$CONCURRENCY" --request-count "$REQUEST_COUNT" --random-seed 0 \
+                --input-file /work/trace.jsonl --custom-dataset-type mooncake_trace \
+                --concurrency "$CONCURRENCY" --random-seed 0 \
                 --artifact-dir /work/out --extra-inputs ignore_eos:true --no-gpu-telemetry
               # Emit the export to stdout so `kubectl logs` collects it (the pod is gone after ttl,
               # so kubectl cp is unavailable). scripts/bench.sh slices between these markers.
@@ -98,6 +110,14 @@ spec:
           volumeMounts:
             - name: work
               mountPath: /work
+            - name: gen
+              mountPath: /gen
       volumes:
         - name: work
           emptyDir: {}
+        # make_session_trace.py, published by scripts/bench.sh as configmap bench-router-gen.
+        # optional so TRACE_MODE=toolagent still runs without the configmap.
+        - name: gen
+          configMap:
+            name: bench-router-gen
+            optional: true

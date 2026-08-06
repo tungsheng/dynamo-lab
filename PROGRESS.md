@@ -291,6 +291,24 @@ the deployed benchmark pipeline end-to-end and surfaced a no-signal result plus 
 
 Teardown via `FORCE=1 make down` → verified `$0` idle. On `feat/router-benchmark` (not yet merged).
 
+**Follow-up — make the benchmark discriminate (2026-08-06, `feat/router-benchmark-followup`).**
+Implemented the three levers the first run identified, so the next live run can actually measure the
+kv-vs-sticky gap (no live run this pass — code + self-review only):
+
+- **Session workload** — `benchmarks/router/make_session_trace.py` generates a session-grouped
+  multi-turn mooncake trace (each session shares a growing prefix via `hash_ids`); the aiperf Job
+  gains `TRACE_MODE=session` (default), mounting the generator from a `bench-router-gen` ConfigMap.
+  This makes the **session-affinity arm meaningful** (the stock toolagent trace was single-turn).
+- **Block-size alignment** — mocker `--block-size 16` + Frontend `DYN_KV_CACHE_BLOCK_SIZE=16` so the
+  router's overlap accounting matches the workers' cache granularity.
+- **Arms** — `bench.sh sweep` now walks kv (credit sweep) + **kv-predict** + **session** +
+  round-robin + load-aware, all replaying the same session trace.
+
+Reviewed: shellcheck + py_compile clean; the generator's growing-prefix/shared-block properties are
+unit-checked; the real `bench.sh` render path (stubbed kubectl) confirms block-size 16 on
+frontend + both mockers and correct per-arm router env; the aiperf Job renders in session mode. Live
+validation (does the signal appear?) is the next run.
+
 ## Outstanding — after the first live `make up`
 
 Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works

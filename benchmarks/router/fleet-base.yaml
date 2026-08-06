@@ -52,11 +52,14 @@ spec:
               env:
                 # scripts/bench.sh replaces the marker line below with this arm's router policy
                 # (DYN_ROUTER_MODE + overlap-score-credit + optional session/predict/load-aware).
-                # VERIFY: align the router KV block size with the mocker --block-size below
-                # (DYN_KV_CACHE_BLOCK_SIZE) so prefix-overlap accounting matches the workers.
                 # __BENCH_ROUTER_ENV__  (replaced per-arm; keep this marker line unique)
                 - name: DYN_SYSTEM_PORT
                   value: "8081"
+                # Router KV block size, aligned with the mocker --block-size (16) so prefix-overlap
+                # accounting matches the workers' cache. VERIFY(live): this env maps to the
+                # frontend --kv-cache-block-size on the pinned release.
+                - name: DYN_KV_CACHE_BLOCK_SIZE
+                  value: "16"
                 - name: ETCD_ENDPOINTS
                   value: http://etcd.dynamo.svc.cluster.local:2379
                 - name: NATS_SERVER
@@ -138,12 +141,18 @@ spec:
                 - Qwen/Qwen3-0.6B
                 - --num-workers
                 - "1"
+                # Engine KV block size — MUST match the frontend DYN_KV_CACHE_BLOCK_SIZE so the
+                # router's prefix-overlap accounting lines up with the workers' cache (follow-up
+                # for the no-signal result). 16 matches the upstream mocker example.
+                - --block-size
+                - "16"
                 - --speedup-ratio
                 - "$(DYN_MOCKER_SPEEDUP_RATIO)"
                 - --disaggregation-mode
                 - prefill
-                # VERIFY: prefix caching is ON by default; add --block-size 16 (and match the
-                # frontend router block size) if you tune it. Do NOT pass --speedup-ratio 0.
+                # Prefix caching is ON by default; --block-size (16) above is aligned with the
+                # frontend DYN_KV_CACHE_BLOCK_SIZE. Do NOT pass --speedup-ratio 0 (removes delays,
+                # erasing the cache-hit TTFT signal).
                 - --planner-profile-data
                 - /workspace/components/src/dynamo/planner/tests/data/profiling_results/H200_TP1P_TP1D
 
@@ -205,6 +214,11 @@ spec:
                 - Qwen/Qwen3-0.6B
                 - --num-workers
                 - "1"
+                # Engine KV block size — MUST match the frontend DYN_KV_CACHE_BLOCK_SIZE so the
+                # router's prefix-overlap accounting lines up with the workers' cache (follow-up
+                # for the no-signal result). 16 matches the upstream mocker example.
+                - --block-size
+                - "16"
                 - --speedup-ratio
                 - "$(DYN_MOCKER_SPEEDUP_RATIO)"
                 - --disaggregation-mode

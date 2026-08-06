@@ -38,15 +38,24 @@ routing policy made no measurable TTFT difference.
 - **kv-credit-4 blocked** by an operator delete-recreate race (a rapidly recreated same-name DGD came
   up `Ready=False` with 0 pods; distinct-named arms were unaffected).
 
-**To make it discriminating (follow-ups, priority order):**
-1. **`--router-predicted-ttl-secs`** (the `kv-predict` arm) — at concurrency 32 the batch-of-siblings
-   race makes kv scatter co-arriving shared-prefix requests like round-robin. Most likely cause.
-2. **Block-size alignment** — set the mocker `--block-size` and Frontend `--kv-cache-block-size` to
-   match so trace prefixes map to credited overlap (currently unaligned defaults).
-3. **Mocker cache→TTFT sensitivity** — confirm a prefix hit actually lowers simulated TTFT at
-   `--speedup-ratio 10` (try a lower ratio / different profile data).
-4. **Trace** — a higher-reuse or `session_id`-carrying trace (see the session note below).
-5. **Sweep methodology** — give each run a distinct DGD name to avoid the same-name recreate race.
+**To make it discriminating — status after the follow-up (`feat/router-benchmark-followup`):**
+1. **`--router-predicted-ttl-secs`** — ✅ *implemented*: the `kv-predict` arm is in the sweep. At
+   concurrency the batch-of-siblings race makes plain kv scatter co-arriving shared-prefix requests
+   like round-robin; predict-on-route pins them. **Pending live validation.**
+2. **Block-size alignment** — ✅ *implemented*: mocker `--block-size 16` + Frontend
+   `DYN_KV_CACHE_BLOCK_SIZE=16` in `fleet-base.yaml`, so trace prefixes map to credited overlap.
+   **Pending live validation.**
+3. **Session workload** — ✅ *implemented*: `make_session_trace.py` generates a session-grouped
+   multi-turn trace with a growing per-session prefix (`TRACE_MODE=session`, the default), so the
+   **session-affinity arm is now meaningful** — the kv-vs-sticky comparison can actually run.
+4. **Mocker cache→TTFT sensitivity** — ⬜ open: confirm a prefix hit lowers simulated TTFT at
+   `--speedup-ratio 10` (needs the live run; try a lower ratio / different profile data if flat).
+5. **Sweep methodology** — `fleet_down` now waits for pod deletion; still prefer a distinct DGD name
+   per credit run (the same-name recreate race).
+
+The next live run replays the session trace across all arms and reads off **where kv TTFT > session
+TTFT** (the router-underperforms-sticky cases) and whether `overlap-score-credit` + predict-on-route
+close the gap.
 
 ## The arms
 
@@ -98,7 +107,8 @@ python3 benchmarks/router/analysis/compare.py results/
 ```
 
 Sweep knobs (env): `BENCH_OVERLAP_CREDIT` (kv), `BENCH_SESSION_TTL` (session), `BENCH_PREDICTED_TTL`
-(kv-predict), `BENCH_CREDITS` (the credit values `sweep` walks for kv).
+(kv-predict), `BENCH_CREDITS` (credit values). Workload: `TRACE_MODE=session` (default; a generated
+multi-turn trace) or `toolagent`; `SESSIONS` / `TURNS` size the session trace.
 
 ## Scorer-ready (future arm)
 
@@ -111,8 +121,9 @@ it is a drop-in later — never a prerequisite for the flag-based research answe
 
 | Path | What |
 |------|------|
-| [fleet-base.yaml](fleet-base.yaml) | the fixed disagg benchmark fleet (planner removed, replicas raised) |
-| [aiperf-job.yaml](aiperf-job.yaml) | in-cluster aiperf runner (agentic trace replay) — `VERIFY`-marked |
+| [fleet-base.yaml](fleet-base.yaml) | the fixed disagg benchmark fleet (no planner, 4+4 workers, block-size 16) |
+| [make_session_trace.py](make_session_trace.py) | generates the session-grouped trace (`TRACE_MODE=session`) |
+| [aiperf-job.yaml](aiperf-job.yaml) | in-cluster aiperf runner (session or toolagent trace replay) |
 | [analysis/compare.py](analysis/compare.py) | tabulate aiperf exports across arms |
 | `../../scripts/bench.sh` | orchestration: `up`/`run`/`down`/`sweep`, per-arm router env |
 
