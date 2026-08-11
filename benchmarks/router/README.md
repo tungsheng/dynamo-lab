@@ -38,24 +38,40 @@ routing policy made no measurable TTFT difference.
 - **kv-credit-4 blocked** by an operator delete-recreate race (a rapidly recreated same-name DGD came
   up `Ready=False` with 0 pods; distinct-named arms were unaffected).
 
-**To make it discriminating — status after the follow-up (`feat/router-benchmark-followup`):**
-1. **`--router-predicted-ttl-secs`** — ✅ *implemented*: the `kv-predict` arm is in the sweep. At
-   concurrency the batch-of-siblings race makes plain kv scatter co-arriving shared-prefix requests
-   like round-robin; predict-on-route pins them. **Pending live validation.**
-2. **Block-size alignment** — ✅ *implemented*: mocker `--block-size 16` + Frontend
-   `DYN_KV_CACHE_BLOCK_SIZE=16` in `fleet-base.yaml`, so trace prefixes map to credited overlap.
-   **Pending live validation.**
-3. **Session workload** — ✅ *implemented*: `make_session_trace.py` generates a session-grouped
-   multi-turn trace with a growing per-session prefix (`TRACE_MODE=session`, the default), so the
-   **session-affinity arm is now meaningful** — the kv-vs-sticky comparison can actually run.
-4. **Mocker cache→TTFT sensitivity** — ⬜ open: confirm a prefix hit lowers simulated TTFT at
-   `--speedup-ratio 10` (needs the live run; try a lower ratio / different profile data if flat).
-5. **Sweep methodology** — `fleet_down` now waits for pod deletion; still prefer a distinct DGD name
-   per credit run (the same-name recreate race).
+## Live validation (2026-08-11) — follow-up implemented, STILL no signal
 
-The next live run replays the session trace across all arms and reads off **where kv TTFT > session
-TTFT** (the router-underperforms-sticky cases) and whether `overlap-score-credit` + predict-on-route
-close the gap.
+The three levers all landed and ran clean on a real cluster (session workload with **191 tracked
+sessions**, block-size 16/16 confirmed on the pods, kv-predict + sticky arms live), yet the routing
+policy still made no TTFT difference:
+
+| arm | TTFT avg | TTFT p99 | E2EL |
+|---|---|---|---|
+| round-robin (cache-blind) | **523 ms** | 841 | 655 |
+| kv (credit=1) | 530 ms | 857 | 685 |
+| load-aware | 564 ms | 1031 | 673 |
+| session (sticky) | 565 ms | 920 | 682 |
+| kv-predict | 567 ms | 917 | 688 |
+
+All within 8%, cache-blind round-robin lowest — **sticky does not beat cache-blind**. (Also fixed a
+live bug: aiperf's `--request-count` defaults to ~10, *not* the dataset size — restored it to the
+trace's row count.)
+
+- `--router-predicted-ttl-secs` (kv-predict) — ✅ implemented + validated; no effect here.
+- Block-size alignment (16/16) — ✅ implemented + confirmed on the pods; no effect here.
+- Session workload (`make_session_trace.py`, `TRACE_MODE=session`) — ✅ implemented; aiperf tracked
+  191 sessions, so the sticky arm ran on a real multi-turn workload.
+
+**The bottleneck is deeper than routing config.** Two candidate root causes remain, both needing
+router/mocker **log** inspection (not config) to distinguish:
+- **(A) session-affinity may not be pinning** — aiperf may not send a session id the router keys on;
+  if sticky isn't binding sessions to workers it can't earn the locality that would beat cache-blind.
+- **(B) the mocker may not discount cached tokens from TTFT** at `--speedup-ratio 10`, so even
+  perfect routing shows no TTFT gain.
+
+Characterizing the router-vs-sticky gap now needs a **root-cause session** (inspect per-worker routing
++ mocker cache/prefill logs), mocker timing-model work if (B), or **Stage 3** (real GPUs). The
+routing-config phase is exhausted. `fleet_down` waits for pod deletion; still prefer a distinct DGD
+name per credit run (the same-name recreate race).
 
 ## The arms
 

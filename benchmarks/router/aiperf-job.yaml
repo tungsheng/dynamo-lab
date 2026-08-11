@@ -85,14 +85,16 @@ spec:
                 python -c "import urllib.request,os; urllib.request.urlretrieve(os.environ['TRACE_URL'], '/work/trace.raw.jsonl')"
                 head -n "$TRACE_ROWS" /work/trace.raw.jsonl > /work/trace.jsonl
               fi
-              echo "[aiperf-bench] using $(wc -l < /work/trace.jsonl) trace rows"
-              echo "[aiperf-bench] run vs $FRONTEND_URL (concurrency=$CONCURRENCY)"
-              # No --request-count: aiperf sends the whole (already-bounded) trace file.
+              ROWS=$(wc -l < /work/trace.jsonl)
+              echo "[aiperf-bench] using $ROWS trace rows"
+              echo "[aiperf-bench] run vs $FRONTEND_URL (concurrency=$CONCURRENCY count=$ROWS)"
+              # aiperf's --request-count defaults to a SMALL number (~10), so pass the trace's row
+              # count explicitly or only a handful of requests are sent (live finding 2026-08-11).
               aiperf profile \
                 --model "$MODEL" --tokenizer "$MODEL" --url "$FRONTEND_URL" \
                 --endpoint-type chat --streaming \
                 --input-file /work/trace.jsonl --custom-dataset-type mooncake_trace \
-                --concurrency "$CONCURRENCY" --random-seed 0 \
+                --concurrency "$CONCURRENCY" --request-count "$ROWS" --random-seed 0 \
                 --artifact-dir /work/out --extra-inputs ignore_eos:true --no-gpu-telemetry
               # Emit the export to stdout so `kubectl logs` collects it (the pod is gone after ttl,
               # so kubectl cp is unavailable). scripts/bench.sh slices between these markers.

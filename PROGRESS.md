@@ -309,6 +309,28 @@ unit-checked; the real `bench.sh` render path (stubbed kubectl) confirms block-s
 frontend + both mockers and correct per-arm router env; the aiperf Job renders in session mode. Live
 validation (does the signal appear?) is the next run.
 
+**Live validation — discriminating run (2026-08-11, `feat/router-benchmark-followup`).** A full
+`make up` + the follow-up (session trace + block-size alignment + kv-predict/session arms). Validated
+the new pipeline live and got a decisive **negative** result:
+
+- **Pipeline validated live:** block-size alignment confirmed on the pods (frontend
+  `DYN_KV_CACHE_BLOCK_SIZE=16` + mocker `--block-size 16`); the `bench-router-gen` ConfigMap mounts
+  and `make_session_trace.py` generates a 1000-row session trace; aiperf replays it tracking **191
+  sessions**.
+- **Bug fixed live:** aiperf's `--request-count` defaults to ~10 (NOT the dataset size) — the first
+  attempt sent only 10 requests. Restored `--request-count = <trace rows>` in `aiperf-job.yaml`.
+- **Result — STILL no signal.** 5 arms on the session trace (1000 reqs, concurrency 32, a cold fleet
+  each): TTFT **523–567 ms** across kv / kv-predict / session / round-robin / load-aware — within 8%,
+  **cache-blind round-robin lowest, sticky does NOT beat it.** A proper session workload + block-size
+  alignment + predict-on-route did not produce a routing signal.
+- **Conclusion:** the routing-config levers are exhausted; the bottleneck is deeper — either (A)
+  session-affinity not reaching the router (no session id in the replay), or (B) the mocker not
+  discounting cached tokens from TTFT at speedup 10. Both need router/mocker log inspection. The
+  GPU-free mocker harness, fully built, does **not** reproduce the router-vs-sticky gap; characterizing
+  it needs a root-cause session, mocker timing-model work, or Stage 3 (real GPUs).
+
+Teardown via `FORCE=1 make down` → verified `$0` idle.
+
 ## Outstanding — after the first live `make up`
 
 Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works
