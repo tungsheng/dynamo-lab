@@ -5,7 +5,7 @@
 # export to stdout for collection. scripts/bench.sh renders ${BENCH_ARM}/${BENCH_FRONTEND_URL}
 # via envsubst before apply.
 #
-# Pinned to the primary sources (Dynamo v1.3.0 benchmarks/router): aiperf==0.10.0, the
+# Pinned to the primary sources (Dynamo v1.3.0 benchmarks/router): aiperf==0.12.0, the
 # `aiperf profile ... --custom-dataset-type mooncake_trace` form, and the toolagent trace.
 # We call `aiperf profile` DIRECTLY (not agent_benchmark.py) so the only dependency is aiperf
 # itself — agent_benchmark.py additionally needs the data-generator package installed.
@@ -39,7 +39,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: aiperf
-          # Validated live 2026-08-06: python:3.12-slim + pip install aiperf==0.10.0 works (adds
+          # Validated live 2026-08-06: python:3.12-slim + pip install aiperf==0.12.0 works (adds
           # ~90s startup). No published image is confirmed to bundle aiperf; bake one to skip pip.
           image: python:3.12-slim
           imagePullPolicy: IfNotPresent
@@ -54,6 +54,12 @@ spec:
               value: "https://raw.githubusercontent.com/kvcache-ai/Mooncake/d21da178bae8db9651cf18a76824c084145fc725/FAST25-release/traces/toolagent_trace.jsonl"
             - name: CONCURRENCY
               value: "32"
+            # Make aiperf emit the x-dynamo-session-id header (from its per-session correlation id) so
+            # the router's --router-session-affinity-ttl-secs can actually BIND. Without this aiperf
+            # only sends X-Correlation-ID, which the router ignores, so the sticky arm never pins —
+            # the root cause of the 2026-08 no-signal (confirmed from primary sources).
+            - name: AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID
+              value: "true"
             # TRACE_MODE: session (generated multi-turn sessions — the sticky/kv comparison) or
             # toolagent (the fetched single-turn Mooncake trace). The follow-up defaults to session.
             - name: TRACE_MODE
@@ -74,8 +80,8 @@ spec:
             - -c
             - |
               set -eu
-              echo "[aiperf-bench arm=$ARM mode=$TRACE_MODE] pip install aiperf==0.10.0"
-              pip install --quiet --no-cache-dir aiperf==0.10.0
+              echo "[aiperf-bench arm=$ARM mode=$TRACE_MODE] pip install aiperf==0.12.0"
+              pip install --quiet --no-cache-dir aiperf==0.12.0
               if [ "$TRACE_MODE" = session ]; then
                 echo "[aiperf-bench] generate session trace (sessions=$SESSIONS turns=$TURNS)"
                 python /gen/make_session_trace.py --sessions "$SESSIONS" --turns "$TURNS" \

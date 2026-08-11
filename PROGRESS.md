@@ -331,6 +331,26 @@ the new pipeline live and got a decisive **negative** result:
 
 Teardown via `FORCE=1 make down` → verified `$0` idle.
 
+**Root-cause session (2026-08-11, `feat/router-benchmark-followup`, Dynamo 1.3.1).** Bumped the lab to
+Dynamo **1.3.1** (latest stable; a 5-commit patch over 1.3.0 — no CRD/mocker/router/helm change; both
+pins propagate: image via manifests, operator chart via `platform.sh --version`). Root-caused the
+no-signal from primary sources + a live run:
+
+- **(A) confirmed + fixed:** the router binds session affinity ONLY on header `x-dynamo-session-id`,
+  which aiperf does not send by default (it sends `X-Correlation-ID`). Set
+  `AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=true` (aiperf 0.12.0). After the fix
+  `router_kv_hit_rate` is non-zero (~0.2) and the mockers publish KV events — the mechanism works.
+- **(B) ruled out:** the mocker charges prefill on uncached tokens only (`predict_prefill_time`).
+- **Result with the fix:** sticky STILL loses — session **573 ms** is the WORST arm, cache-blind
+  round-robin **535 ms** the best (kv 544, kv-predict 549, load-aware 561). The ~20% overlap benefit is
+  outweighed by sticky's load-balancing cost on a cheap-prefill mocker (speedup 10, 4 workers, conc 32).
+- **Conclusion — a REGIME gap, not a bug.** Cache locality is too cheap on the mocker for sticky to
+  win; the "sticky ≈ optimal for prefill" hypothesis needs expensive prefill (large models / real GPUs
+  — Stage 3). The instrument, router, and affinity all work. See benchmarks/router/README.md (Root
+  cause) + ADR 0010.
+
+Teardown via `FORCE=1 make down` → verified `$0` idle.
+
 ## Outstanding — after the first live `make up`
 
 Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works

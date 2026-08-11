@@ -68,10 +68,42 @@ router/mocker **log** inspection (not config) to distinguish:
 - **(B) the mocker may not discount cached tokens from TTFT** at `--speedup-ratio 10`, so even
   perfect routing shows no TTFT gain.
 
-Characterizing the router-vs-sticky gap now needs a **root-cause session** (inspect per-worker routing
-+ mocker cache/prefill logs), mocker timing-model work if (B), or **Stage 3** (real GPUs). The
-routing-config phase is exhausted. `fleet_down` waits for pod deletion; still prefer a distinct DGD
-name per credit run (the same-name recreate race).
+→ **Root cause resolved below.**
+
+## Root cause (2026-08-11, Dynamo 1.3.1) — RESOLVED
+
+The root-cause session settled it: **(A) confirmed and fixed, (B) ruled out — but sticky still loses,
+for a deeper reason.**
+
+- **(A) the session id never reached the router.** Dynamo binds affinity only on the HTTP header
+  `x-dynamo-session-id`; aiperf sends `X-Correlation-ID` by default, which the router ignores. Fix:
+  `AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=true` (aiperf ≥0.12.0). After the fix the router
+  computes non-zero overlap (`router_kv_hit_rate` ~0.2) and the mockers publish KV events — the
+  mechanism works.
+- **(B) ruled out:** the mocker charges prefill on uncached tokens only (`predict_prefill_time`
+  returns 0 for a fully-cached prompt).
+
+**Result with the fix (session header on the wire):**
+
+| arm | TTFT avg |
+|---|---|
+| round-robin (cache-blind) | **535 ms** ← best |
+| kv | 544 ms |
+| kv-predict | 549 ms |
+| load-aware | 561 ms |
+| session (sticky) | **573 ms** ← worst |
+
+**Sticky is the _worst_ arm.** The achieved overlap is only ~20%, and that small cache benefit is
+outweighed by sticky's load-balancing cost (pinning a session concentrates load → queueing) on a
+cheap-prefill mocker (speedup 10, 4 workers, concurrency 32).
+
+**Conclusion — a _regime_ gap, not a bug.** On the GPU-free mocker at this scale cache locality is too
+cheap for sticky to win; "sticky ≈ optimal for prefill" needs an expensive-prefill regime (large
+models / big prefixes / real KV-transfer) — i.e. **Stage 3 (real GPUs)**. The instrument, router, and
+affinity all work; the mocker sits on the wrong side of the cache-benefit-vs-load-balance crossover.
+To push it toward the crossover: many more turns/session + larger `--system-blocks` (raise realized
+overlap well above 20%), and confirm per-session pinning via `router_kv_hit_rate` per worker.
+(`fleet_down` waits for pod deletion; prefer a distinct DGD name per credit run — the same-name race.)
 
 ## The arms
 

@@ -49,16 +49,16 @@ PROJECT="${PROJECT:-dynamo-lab}"
 
 # Pinned Dynamo MOCKER IMAGE tag. Shared with fleet manifests via env. This is the
 # container image tag ONLY — the Dynamo platform helm chart versions independently (below).
-# Verified v1.3.0: nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.3.0 ships the dynamo.mocker
-# module and runs CPU-only (docs/dynosim/mocker.md; examples/backends/mocker/deploy/agg.yaml).
-DYNAMO_VERSION="${DYNAMO_VERSION:-1.3.0}"
+# Verified v1.3.1 (latest stable, 2026-08-06; a 5-commit patch over 1.3.0 with NO mocker/CRD/router
+# change): nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.3.1 ships dynamo.mocker, CPU-only.
+DYNAMO_VERSION="${DYNAMO_VERSION:-1.3.1}"
 export DYNAMO_VERSION
 
 # Dynamo platform helm CHART version — independent of DYNAMO_VERSION (the mocker image tag).
-# Verified v1.3.0 (deploy/helm/charts/platform/Chart.yaml: name dynamo-platform, version 1.3.0).
-# The standalone dynamo-crds chart is GONE as of v1.3.0 — the operator image applies the CRDs
-# via its crd-apply init container, so there is no separate CRDs chart/version to pin.
-DYNAMO_PLATFORM_VERSION="${DYNAMO_PLATFORM_VERSION:-1.3.0}"
+# Verified v1.3.1 (deploy/helm/charts/platform/Chart.yaml: name dynamo-platform, version 1.3.1).
+# The standalone dynamo-crds chart is GONE — the operator image applies the CRDs via its
+# crd-apply init container, so there is no separate CRDs chart/version to pin.
+DYNAMO_PLATFORM_VERSION="${DYNAMO_PLATFORM_VERSION:-1.3.1}"
 
 # --------------------------------------------------------------------------
 # Load-test fleet topology selector (INDEPENDENT of the k6 traffic PROFILE)
