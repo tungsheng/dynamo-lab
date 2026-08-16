@@ -49,8 +49,9 @@ bench_env_entry() { printf '                - name: %s\n                  value:
 # the __BENCH_ROUTER_ENV__ marker in fleet-base.yaml. Only the flags an arm needs are emitted
 # (no disable sentinels), so each arm's config stays clean — in particular the kv arm carries NO
 # session-affinity env, which is what makes the kv-vs-session comparison honest. The README arm
-# table mirrors this. VERIFY (live, against the pinned Dynamo release): the env var NAMES below,
-# and that a shipped default (unset) disables session-affinity / predicted-ttl / load-aware.
+# table mirrors this. Env var names verified against Dynamo 1.3.1 (router_args.py / kv_router_args.py)
+# and exercised live 2026-08-11 (each arm's policy landed on the Frontend; session affinity binds only
+# with the x-dynamo-session-id header — see aiperf-job.yaml).
 router_env_yaml() {
   local arm="$1"
   case "$arm" in

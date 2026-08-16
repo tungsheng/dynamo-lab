@@ -160,10 +160,31 @@ multi-turn trace) or `toolagent`; `SESSIONS` / `TURNS` size the session trace.
 
 ## Scorer-ready (future arm)
 
-The policy is a **pluggable axis**, so Dynamo issue #11875 (native composable
-`WorkerScorer`/`Picker`) becomes a future arm: a custom-scorer image slots in beside the flag-based
-arms with the same trace and metrics. #11875 is a **draft DEP (Rust-only, ~1/5 steps merged)**, so
-it is a drop-in later — never a prerequisite for the flag-based research answer here.
+The policy is a **pluggable axis**, so Dynamo's native composable Selector (#11875) becomes a future
+arm: a custom-scorer image slots in beside the flag-based arms with the same trace and metrics.
+**Status (2026-08-14):** #11875 is **merged + closed-completed on Dynamo `main`** — `WorkerScorer` /
+`WorkerFilter` / `WorkerPicker` traits + a `SelectionServiceBuilder` factory + example policy crates
+(`examples/router/custom-policy-example/`, feature `standalone-selection`). It is **not in a stable
+release yet**, and `main` is release-gated (see Upstream watch), so the custom-scorer arm lands at the
+next stable release or via a source-build spike. Never a prerequisite for the flag-based arms here.
+
+## Upstream watch (Dynamo `main`, as of 2026-08-14)
+
+Audited `v1.3.1...main` — **nothing forces a change** to this 1.3.1-pinned lab (mocker CLI, all 7
+router env vars, session-affinity keying, DGD spec, helm keys, aiperf all intact). Two `main`-only
+items are worth adopting when they release (or in a deliberate source build):
+
+- **#11875 — composable Selector plug-in** (above): makes the custom-scorer arm real.
+- **#12711 — a direct measured cache-hit signal**: the mocker now emits post-eviction `cached_tokens`
+  in the first chunk's `completion_usage`, so the frontend cache-hit metric reflects *actual* hits.
+  This would replace the TTFT-derived hit-rate (the [ADR 0010](../../docs/adr/0010-router-benchmark-kv-vs-session.md)
+  "no scalar cache-hit gauge" limitation) — exactly what read 0 in the root-cause session.
+- **CRD storage flipped v1alpha1 → v1beta1** on `main` (#11904) — *aligns* with this lab's v1beta1
+  manifests; no action.
+- **`main` is release-gated:** NGC publishes `dynamo-planner` + `dynamo-platform` only on release
+  tags (nightlies exclude both). Reaching `main` = build from source or repackage the `ai-dynamo`
+  nightly wheel into a CPU image — a spike, not a pin bump. (aiperf's native `x-dynamo-session-id`
+  header, #1151, is already what this lab uses via the `AIPERF_HTTP_*` env.)
 
 ## Layout
 

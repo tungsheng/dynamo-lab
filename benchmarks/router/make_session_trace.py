@@ -23,9 +23,10 @@ The knobs make the workload tunable for the discrimination the first live run la
 Usage:
   python make_session_trace.py --sessions 200 --turns 5 > trace.jsonl
 
-VERIFY (live): that aiperf's mooncake loader materializes shared-``hash_ids`` rows as byte-identical
-token prefixes at the engine block size — i.e. that the router actually sees the overlap. Confirm on
-the next live run (align --block-size with the mocker/router KV block size).
+Confirmed live 2026-08-11 (Dynamo 1.3.1): shared ``hash_ids`` DO produce router overlap
+(``router_kv_hit_rate`` ~0.2), so aiperf's mooncake loader materializes the shared prefixes. The
+overlap is modest (~20%) on this workload — see benchmarks/router/README.md (Root cause) for why
+that did not translate into a sticky-vs-cache-blind TTFT win.
 """
 import argparse
 import json
