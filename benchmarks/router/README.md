@@ -38,15 +38,72 @@ routing policy made no measurable TTFT difference.
 - **kv-credit-4 blocked** by an operator delete-recreate race (a rapidly recreated same-name DGD came
   up `Ready=False` with 0 pods; distinct-named arms were unaffected).
 
-**To make it discriminating (follow-ups, priority order):**
-1. **`--router-predicted-ttl-secs`** (the `kv-predict` arm) — at concurrency 32 the batch-of-siblings
-   race makes kv scatter co-arriving shared-prefix requests like round-robin. Most likely cause.
-2. **Block-size alignment** — set the mocker `--block-size` and Frontend `--kv-cache-block-size` to
-   match so trace prefixes map to credited overlap (currently unaligned defaults).
-3. **Mocker cache→TTFT sensitivity** — confirm a prefix hit actually lowers simulated TTFT at
-   `--speedup-ratio 10` (try a lower ratio / different profile data).
-4. **Trace** — a higher-reuse or `session_id`-carrying trace (see the session note below).
-5. **Sweep methodology** — give each run a distinct DGD name to avoid the same-name recreate race.
+## Live validation (2026-08-11) — follow-up implemented, STILL no signal
+
+The three levers all landed and ran clean on a real cluster (session workload with **191 tracked
+sessions**, block-size 16/16 confirmed on the pods, kv-predict + sticky arms live), yet the routing
+policy still made no TTFT difference:
+
+| arm | TTFT avg | TTFT p99 | E2EL |
+|---|---|---|---|
+| round-robin (cache-blind) | **523 ms** | 841 | 655 |
+| kv (credit=1) | 530 ms | 857 | 685 |
+| load-aware | 564 ms | 1031 | 673 |
+| session (sticky) | 565 ms | 920 | 682 |
+| kv-predict | 567 ms | 917 | 688 |
+
+All within 8%, cache-blind round-robin lowest — **sticky does not beat cache-blind**. (Also fixed a
+live bug: aiperf's `--request-count` defaults to ~10, *not* the dataset size — restored it to the
+trace's row count.)
+
+- `--router-predicted-ttl-secs` (kv-predict) — ✅ implemented + validated; no effect here.
+- Block-size alignment (16/16) — ✅ implemented + confirmed on the pods; no effect here.
+- Session workload (`make_session_trace.py`, `TRACE_MODE=session`) — ✅ implemented; aiperf tracked
+  191 sessions, so the sticky arm ran on a real multi-turn workload.
+
+**The bottleneck is deeper than routing config.** Two candidate root causes remain, both needing
+router/mocker **log** inspection (not config) to distinguish:
+- **(A) session-affinity may not be pinning** — aiperf may not send a session id the router keys on;
+  if sticky isn't binding sessions to workers it can't earn the locality that would beat cache-blind.
+- **(B) the mocker may not discount cached tokens from TTFT** at `--speedup-ratio 10`, so even
+  perfect routing shows no TTFT gain.
+
+→ **Root cause resolved below.**
+
+## Root cause (2026-08-11, Dynamo 1.3.1) — RESOLVED
+
+The root-cause session settled it: **(A) confirmed and fixed, (B) ruled out — but sticky still loses,
+for a deeper reason.**
+
+- **(A) the session id never reached the router.** Dynamo binds affinity only on the HTTP header
+  `x-dynamo-session-id`; aiperf sends `X-Correlation-ID` by default, which the router ignores. Fix:
+  `AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=true` (aiperf ≥0.12.0). After the fix the router
+  computes non-zero overlap (`router_kv_hit_rate` ~0.2) and the mockers publish KV events — the
+  mechanism works.
+- **(B) ruled out:** the mocker charges prefill on uncached tokens only (`predict_prefill_time`
+  returns 0 for a fully-cached prompt).
+
+**Result with the fix (session header on the wire):**
+
+| arm | TTFT avg |
+|---|---|
+| round-robin (cache-blind) | **535 ms** ← best |
+| kv | 544 ms |
+| kv-predict | 549 ms |
+| load-aware | 561 ms |
+| session (sticky) | **573 ms** ← worst |
+
+**Sticky is the _worst_ arm.** The achieved overlap is only ~20%, and that small cache benefit is
+outweighed by sticky's load-balancing cost (pinning a session concentrates load → queueing) on a
+cheap-prefill mocker (speedup 10, 4 workers, concurrency 32).
+
+**Conclusion — a _regime_ gap, not a bug.** On the GPU-free mocker at this scale cache locality is too
+cheap for sticky to win; "sticky ≈ optimal for prefill" needs an expensive-prefill regime (large
+models / big prefixes / real KV-transfer) — i.e. **Stage 3 (real GPUs)**. The instrument, router, and
+affinity all work; the mocker sits on the wrong side of the cache-benefit-vs-load-balance crossover.
+To push it toward the crossover: many more turns/session + larger `--system-blocks` (raise realized
+overlap well above 20%), and confirm per-session pinning via `router_kv_hit_rate` per worker.
+(`fleet_down` waits for pod deletion; prefer a distinct DGD name per credit run — the same-name race.)
 
 ## The arms
 
@@ -98,21 +155,44 @@ python3 benchmarks/router/analysis/compare.py results/
 ```
 
 Sweep knobs (env): `BENCH_OVERLAP_CREDIT` (kv), `BENCH_SESSION_TTL` (session), `BENCH_PREDICTED_TTL`
-(kv-predict), `BENCH_CREDITS` (the credit values `sweep` walks for kv).
+(kv-predict), `BENCH_CREDITS` (credit values). Workload: `TRACE_MODE=session` (default; a generated
+multi-turn trace) or `toolagent`; `SESSIONS` / `TURNS` size the session trace.
 
 ## Scorer-ready (future arm)
 
-The policy is a **pluggable axis**, so Dynamo issue #11875 (native composable
-`WorkerScorer`/`Picker`) becomes a future arm: a custom-scorer image slots in beside the flag-based
-arms with the same trace and metrics. #11875 is a **draft DEP (Rust-only, ~1/5 steps merged)**, so
-it is a drop-in later — never a prerequisite for the flag-based research answer here.
+The policy is a **pluggable axis**, so Dynamo's native composable Selector (#11875) becomes a future
+arm: a custom-scorer image slots in beside the flag-based arms with the same trace and metrics.
+**Status (2026-08-14):** #11875 is **merged + closed-completed on Dynamo `main`** — `WorkerScorer` /
+`WorkerFilter` / `WorkerPicker` traits + a `SelectionServiceBuilder` factory + example policy crates
+(`examples/router/custom-policy-example/`, feature `standalone-selection`). It is **not in a stable
+release yet**, and `main` is release-gated (see Upstream watch), so the custom-scorer arm lands at the
+next stable release or via a source-build spike. Never a prerequisite for the flag-based arms here.
+
+## Upstream watch (Dynamo `main`, as of 2026-08-14)
+
+Audited `v1.3.1...main` — **nothing forces a change** to this 1.3.1-pinned lab (mocker CLI, all 7
+router env vars, session-affinity keying, DGD spec, helm keys, aiperf all intact). Two `main`-only
+items are worth adopting when they release (or in a deliberate source build):
+
+- **#11875 — composable Selector plug-in** (above): makes the custom-scorer arm real.
+- **#12711 — a direct measured cache-hit signal**: the mocker now emits post-eviction `cached_tokens`
+  in the first chunk's `completion_usage`, so the frontend cache-hit metric reflects *actual* hits.
+  This would replace the TTFT-derived hit-rate (the [ADR 0010](../../docs/adr/0010-router-benchmark-kv-vs-session.md)
+  "no scalar cache-hit gauge" limitation) — exactly what read 0 in the root-cause session.
+- **CRD storage flipped v1alpha1 → v1beta1** on `main` (#11904) — *aligns* with this lab's v1beta1
+  manifests; no action.
+- **`main` is release-gated:** NGC publishes `dynamo-planner` + `dynamo-platform` only on release
+  tags (nightlies exclude both). Reaching `main` = build from source or repackage the `ai-dynamo`
+  nightly wheel into a CPU image — a spike, not a pin bump. (aiperf's native `x-dynamo-session-id`
+  header, #1151, is already what this lab uses via the `AIPERF_HTTP_*` env.)
 
 ## Layout
 
 | Path | What |
 |------|------|
-| [fleet-base.yaml](fleet-base.yaml) | the fixed disagg benchmark fleet (planner removed, replicas raised) |
-| [aiperf-job.yaml](aiperf-job.yaml) | in-cluster aiperf runner (agentic trace replay) — `VERIFY`-marked |
+| [fleet-base.yaml](fleet-base.yaml) | the fixed disagg benchmark fleet (no planner, 4+4 workers, block-size 16) |
+| [make_session_trace.py](make_session_trace.py) | generates the session-grouped trace (`TRACE_MODE=session`) |
+| [aiperf-job.yaml](aiperf-job.yaml) | in-cluster aiperf runner (session or toolagent trace replay) |
 | [analysis/compare.py](analysis/compare.py) | tabulate aiperf exports across arms |
 | `../../scripts/bench.sh` | orchestration: `up`/`run`/`down`/`sweep`, per-arm router env |
 

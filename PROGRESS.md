@@ -291,6 +291,66 @@ the deployed benchmark pipeline end-to-end and surfaced a no-signal result plus 
 
 Teardown via `FORCE=1 make down` → verified `$0` idle. On `feat/router-benchmark` (not yet merged).
 
+**Follow-up — make the benchmark discriminate (2026-08-06, `feat/router-benchmark-followup`).**
+Implemented the three levers the first run identified, so the next live run can actually measure the
+kv-vs-sticky gap (no live run this pass — code + self-review only):
+
+- **Session workload** — `benchmarks/router/make_session_trace.py` generates a session-grouped
+  multi-turn mooncake trace (each session shares a growing prefix via `hash_ids`); the aiperf Job
+  gains `TRACE_MODE=session` (default), mounting the generator from a `bench-router-gen` ConfigMap.
+  This makes the **session-affinity arm meaningful** (the stock toolagent trace was single-turn).
+- **Block-size alignment** — mocker `--block-size 16` + Frontend `DYN_KV_CACHE_BLOCK_SIZE=16` so the
+  router's overlap accounting matches the workers' cache granularity.
+- **Arms** — `bench.sh sweep` now walks kv (credit sweep) + **kv-predict** + **session** +
+  round-robin + load-aware, all replaying the same session trace.
+
+Reviewed: shellcheck + py_compile clean; the generator's growing-prefix/shared-block properties are
+unit-checked; the real `bench.sh` render path (stubbed kubectl) confirms block-size 16 on
+frontend + both mockers and correct per-arm router env; the aiperf Job renders in session mode. Live
+validation (does the signal appear?) is the next run.
+
+**Live validation — discriminating run (2026-08-11, `feat/router-benchmark-followup`).** A full
+`make up` + the follow-up (session trace + block-size alignment + kv-predict/session arms). Validated
+the new pipeline live and got a decisive **negative** result:
+
+- **Pipeline validated live:** block-size alignment confirmed on the pods (frontend
+  `DYN_KV_CACHE_BLOCK_SIZE=16` + mocker `--block-size 16`); the `bench-router-gen` ConfigMap mounts
+  and `make_session_trace.py` generates a 1000-row session trace; aiperf replays it tracking **191
+  sessions**.
+- **Bug fixed live:** aiperf's `--request-count` defaults to ~10 (NOT the dataset size) — the first
+  attempt sent only 10 requests. Restored `--request-count = <trace rows>` in `aiperf-job.yaml`.
+- **Result — STILL no signal.** 5 arms on the session trace (1000 reqs, concurrency 32, a cold fleet
+  each): TTFT **523–567 ms** across kv / kv-predict / session / round-robin / load-aware — within 8%,
+  **cache-blind round-robin lowest, sticky does NOT beat it.** A proper session workload + block-size
+  alignment + predict-on-route did not produce a routing signal.
+- **Conclusion:** the routing-config levers are exhausted; the bottleneck is deeper — either (A)
+  session-affinity not reaching the router (no session id in the replay), or (B) the mocker not
+  discounting cached tokens from TTFT at speedup 10. Both need router/mocker log inspection. The
+  GPU-free mocker harness, fully built, does **not** reproduce the router-vs-sticky gap; characterizing
+  it needs a root-cause session, mocker timing-model work, or Stage 3 (real GPUs).
+
+Teardown via `FORCE=1 make down` → verified `$0` idle.
+
+**Root-cause session (2026-08-11, `feat/router-benchmark-followup`, Dynamo 1.3.1).** Bumped the lab to
+Dynamo **1.3.1** (latest stable; a 5-commit patch over 1.3.0 — no CRD/mocker/router/helm change; both
+pins propagate: image via manifests, operator chart via `platform.sh --version`). Root-caused the
+no-signal from primary sources + a live run:
+
+- **(A) confirmed + fixed:** the router binds session affinity ONLY on header `x-dynamo-session-id`,
+  which aiperf does not send by default (it sends `X-Correlation-ID`). Set
+  `AIPERF_HTTP_X_DYNAMO_SESSION_ID_FROM_CORRELATION_ID=true` (aiperf 0.12.0). After the fix
+  `router_kv_hit_rate` is non-zero (~0.2) and the mockers publish KV events — the mechanism works.
+- **(B) ruled out:** the mocker charges prefill on uncached tokens only (`predict_prefill_time`).
+- **Result with the fix:** sticky STILL loses — session **573 ms** is the WORST arm, cache-blind
+  round-robin **535 ms** the best (kv 544, kv-predict 549, load-aware 561). The ~20% overlap benefit is
+  outweighed by sticky's load-balancing cost on a cheap-prefill mocker (speedup 10, 4 workers, conc 32).
+- **Conclusion — a REGIME gap, not a bug.** Cache locality is too cheap on the mocker for sticky to
+  win; the "sticky ≈ optimal for prefill" hypothesis needs expensive prefill (large models / real GPUs
+  — Stage 3). The instrument, router, and affinity all work. See benchmarks/router/README.md (Root
+  cause) + ADR 0010.
+
+Teardown via `FORCE=1 make down` → verified `$0` idle.
+
 ## Outstanding — after the first live `make up`
 
 Applied and **live-validated on EKS 1.36** (2026-07-28, Pass 7). The whole `make up` path works

@@ -49,8 +49,9 @@ bench_env_entry() { printf '                - name: %s\n                  value:
 # the __BENCH_ROUTER_ENV__ marker in fleet-base.yaml. Only the flags an arm needs are emitted
 # (no disable sentinels), so each arm's config stays clean — in particular the kv arm carries NO
 # session-affinity env, which is what makes the kv-vs-session comparison honest. The README arm
-# table mirrors this. VERIFY (live, against the pinned Dynamo release): the env var NAMES below,
-# and that a shipped default (unset) disables session-affinity / predicted-ttl / load-aware.
+# table mirrors this. Env var names verified against Dynamo 1.3.1 (router_args.py / kv_router_args.py)
+# and exercised live 2026-08-11 (each arm's policy landed on the Frontend; session affinity binds only
+# with the x-dynamo-session-id header — see aiperf-job.yaml).
 router_env_yaml() {
   local arm="$1"
   case "$arm" in
@@ -125,6 +126,10 @@ aiperf_run() {
   ensure_kubeconfig
   ensure_namespace "$NS_LOAD"
   [[ -f "$AIPERF_JOB" ]] || die "aiperf job manifest not found: ${AIPERF_JOB}"
+  # Publish the session-trace generator so the Job (TRACE_MODE=session) can mount + run it.
+  kubectl create configmap bench-router-gen -n "$NS_LOAD" \
+    --from-file=make_session_trace.py="${BENCH_ROUTER_DIR}/make_session_trace.py" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   BENCH_ARM="$arm"
   BENCH_FRONTEND_URL="$(bench_frontend_url "$arm")"
   export BENCH_ARM BENCH_FRONTEND_URL
@@ -163,12 +168,12 @@ collect_arm() {
     && ok "collected results/${label}/profile_export_aiperf.json" || warn "no export extracted for ${label}"
 }
 
-# sweep — stand up a cold fleet per arm, run aiperf, collect, tear down. Sweeps BENCH_CREDITS on the
-# kv arm plus the cache-blind floors. NOTE (live 2026-08-06): the kv credit loop reuses the same DGD
-# name, which can hit an operator delete-recreate race (new DGD Ready=False, 0 pods) even with the
-# fleet_down wait; for a clean credit sweep run on a FRESH cluster or give each run a distinct name.
-# The `session` arm is omitted — it needs a session_id-carrying trace (the stock toolagent trace is
-# single-turn); see benchmarks/router/README.md.
+# sweep — stand up a cold fleet per arm, run aiperf (TRACE_MODE=session by default so every arm
+# replays the SAME session-grouped workload), collect, tear down. Sweeps BENCH_CREDITS on the kv
+# arm, then kv-predict / session / cache-blind floors. NOTE (live 2026-08-06): the kv credit loop
+# reuses the same DGD name, which can hit an operator delete-recreate race (new DGD Ready=False, 0
+# pods) even with the fleet_down wait; for a clean credit sweep run on a FRESH cluster or give each
+# run a distinct name.
 sweep() {
   local arm credit
   for credit in $BENCH_CREDITS; do
@@ -178,7 +183,7 @@ sweep() {
     wait_job kv && collect_arm "kv-credit-${credit}" kv
     fleet_down kv
   done
-  for arm in round-robin load-aware; do
+  for arm in kv-predict session round-robin load-aware; do
     fleet_up "$arm"
     aiperf_run "$arm"
     wait_job "$arm" && collect_arm "$arm" "$arm"
