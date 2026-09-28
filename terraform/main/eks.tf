@@ -8,7 +8,7 @@
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 21.25.0" # pin to 21.24.x: 21.25.0 raised the aws provider floor to >=6.59.0 (broke a
+  version = "~> 21.26.0" # pin to 21.24.x: 21.25.0 raised the aws provider floor to >=6.59.0 (broke a
   # fresh CI init against the locked aws 6.57.1). v21 renamed the cluster_* inputs (name/kubernetes_version/endpoint_*/addons).
 
   name               = var.cluster_name
